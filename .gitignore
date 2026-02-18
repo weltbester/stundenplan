@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Generierte Konfiguration (nutzerspezifisch)
+config/school_config.yaml
+
+# Ausgabe- und Szenario-Dateien
+output/*
+!output/.gitkeep
+scenarios/*
+!scenarios/.gitkeep

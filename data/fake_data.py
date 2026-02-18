@@ -51,7 +51,8 @@ _LAST_NAMES = [
 ]
 
 # ─── Fächerkombinationen (gewichtet) ─────────────────────────────────────────
-# WICHTIG: Chemie wird NICHT in diese Liste aufgenommen → separate Engpass-Lehrer!
+# WICHTIG: Chemie und Sport werden NICHT aufgenommen → separate Pflicht-Lehrer!
+# (Analog zu Chemie-Engpass: Sport wird deterministisch über feste Lehrer abgedeckt.)
 
 _SUBJECT_COMBOS: list[tuple[list[str], int]] = [
     (["Mathematik", "Physik"], 8),
@@ -60,7 +61,6 @@ _SUBJECT_COMBOS: list[tuple[list[str], int]] = [
     (["Biologie", "Erdkunde"], 5),
     (["Mathematik", "Informatik"], 5),
     (["Erdkunde", "Politik"], 5),
-    (["Englisch", "Sport"], 4),
     (["Physik", "Informatik"], 4),
     (["Latein", "Deutsch"], 4),
     (["Geschichte", "Politik"], 4),
@@ -68,7 +68,6 @@ _SUBJECT_COMBOS: list[tuple[list[str], int]] = [
     (["Musik"], 4),
     (["Deutsch", "Kunst"], 3),
     (["Englisch", "Geschichte"], 3),
-    (["Sport", "Biologie"], 3),
     (["Religion", "Geschichte"], 3),
     (["Mathematik", "Deutsch"], 3),
     (["Musik", "Kunst"], 2),
@@ -207,18 +206,24 @@ class FakeDataGenerator:
     def _generate_teachers(self) -> list[Teacher]:
         """Erzeugt alle Lehrkräfte mit Engpässen gemäß Spec.
 
-        Engpass-Lehrkräfte (7):
-          - 2 Chemie-Lehrkräfte (Engpass #1 + #2)
-          - 4 Teilzeit-Lehrkräfte mit Freitag-Wunsch (Engpass #3)
-          - 1 stark eingeschränkte Lehrkraft (Engpass #4)
-        Restliche 98 Lehrkräfte: gewichtete Fächerkombinationen.
+        Feste Lehrkräfte (12):
+          - 2 Chemie-Lehrkräfte        (Engpass #1+#2: 52h vs. 48h Bedarf → 92%)
+          - 4 Freitag-TZ               (Engpass #3: Freitag-Cluster)
+          - 1 stark eingeschränkt      (Engpass #4: Mo+Fr+Di-nachmittags gesperrt)
+          - 5 Sport-Lehrkräfte         (Pflicht-Abdeckung: 130h vs. 108h Bedarf)
+        Restliche (tc.total_count − 12) Lehrkräfte: gewichtete Fächerkombinationen.
+
+        Puffer-Kalkulation (Default: total=60, VZ=26h, TZ_min=12h, 30% TZ):
+          Feste: 2×26 + 4×12 + 16 + 5×26 = 246h
+          Zufällig (48): 13 TZ×12 + 35 VZ×26 = 1066h
+          Gesamt: 1312h, Bedarf: ~1212h → Puffer ≈ 8%
         """
         tc = self.config.teachers
         teachers: list[Teacher] = []
         sek1_max = self.config.time_grid.sek1_max_slot
 
         # ── Engpass #1/#2: Chemie-Lehrkräfte (absichtlich knapp) ───────────
-        # Chemie-Bedarf: Jahrgänge 7-10, je 6 Klassen, 2h/Woche = 48h
+        # Bedarf Jg.7-10: 4 Jahrgänge × 6 Klassen × 2h = 48h/Woche
         # Kapazität: 26 + 26 = 52h → 92% Auslastung → Warnung
         teachers.append(self._make_teacher(
             subjects=["Chemie"],
@@ -230,21 +235,21 @@ class FakeDataGenerator:
         ))
 
         # ── Engpass #3: Freitag-Cluster (4 Teilzeit mit Fr-Wunsch) ─────────
+        # Deputat = Minimum für deterministischen Puffer
         for _ in range(4):
-            dep = self.rng.randint(tc.teilzeit_deputat_min, tc.teilzeit_deputat_max)
             subjects = self.rng.choices(
                 _COMBO_SUBJECTS, weights=_COMBO_WEIGHTS
             )[0]
             teachers.append(self._make_teacher(
                 subjects=subjects,
-                deputat=dep,
+                deputat=tc.teilzeit_deputat_min,
                 is_teilzeit=True,
                 preferred_free_days=[4],  # Freitag
             ))
 
-        # ── Engpass #4: Stark eingeschränkter Lehrer ────────────────────────
-        # Mo (Tag 0) komplett gesperrt + Fr (Tag 4) komplett gesperrt
-        # Di (Tag 1) nur Slots 1-3, Slots 4..sek1_max gesperrt
+        # ── Engpass #4: Stark eingeschränkte Lehrkraft ──────────────────────
+        # Mo (Tag 0) und Fr (Tag 4) komplett gesperrt
+        # Di (Tag 1) nur Slots 1-3 verfügbar
         blocked: list[tuple[int, int]] = []
         for slot in range(1, sek1_max + 1):
             blocked.append((0, slot))  # Montag gesperrt
@@ -252,34 +257,46 @@ class FakeDataGenerator:
         for slot in range(4, sek1_max + 1):
             blocked.append((1, slot))  # Di nachmittags gesperrt
         subjects = self.rng.choices(_COMBO_SUBJECTS, weights=_COMBO_WEIGHTS)[0]
-        restricted_teacher = self._make_teacher(
+        teachers.append(self._make_teacher(
             subjects=subjects,
             deputat=16,
             is_teilzeit=True,
             unavailable_slots=blocked,
-        )
-        teachers.append(restricted_teacher)
+        ))
 
-        # ── Restliche Lehrkräfte (105 - 7 = 98) ─────────────────────────────
+        # ── Sport-Basisabdeckung: 5 VZ Sport-Lehrkräfte ─────────────────────
+        # Sport wird NICHT in _SUBJECT_COMBOS aufgenommen → deterministisch.
+        # Bedarf: 36 Klassen × 3h = 108h. Kapazität: 5 × 26h = 130h (~20% Puffer).
+        for sport_subjects in [
+            ["Sport"],
+            ["Sport", "Biologie"],
+            ["Sport", "Biologie"],
+            ["Sport", "Geschichte"],
+            ["Sport", "Erdkunde"],
+        ]:
+            teachers.append(self._make_teacher(
+                subjects=sport_subjects,
+                deputat=tc.vollzeit_deputat,
+            ))
+
+        # ── Restliche Lehrkräfte (tc.total_count − 12) ───────────────────────
+        # TZ-Deputat = Minimum für deterministischen Gesamtpuffer (~8%)
+        # TZ-Anzahl: Config-Quote minus bereits platzierte TZ (4 Freitag + 1 restricted = 5)
         remaining = tc.total_count - len(teachers)
-        num_teilzeit_remaining = max(0,
-            int(tc.total_count * tc.teilzeit_percentage) - 4  # 4 Freitag-Cluster schon dabei
+        num_teilzeit_remaining = max(
+            0,
+            int(tc.total_count * tc.teilzeit_percentage) - 5  # 5 TZ bereits platziert
         )
-        # Teilzeit zuerst, dann Vollzeit
         for i in range(remaining):
             is_tz = i < num_teilzeit_remaining
-            if is_tz:
-                dep = self.rng.randint(tc.teilzeit_deputat_min, tc.teilzeit_deputat_max)
-            else:
-                dep = tc.vollzeit_deputat
+            dep = tc.teilzeit_deputat_min if is_tz else tc.vollzeit_deputat
 
             subjects = self.rng.choices(_COMBO_SUBJECTS, weights=_COMBO_WEIGHTS)[0]
 
-            # 20% Chance auf einen Wunschtag (außer Freitag → der ist schon verteilt)
+            # 20% Chance auf einen Wunschtag (Mo-Do; Freitag schon im Cluster)
             free_wishes: list[int] = []
             if self.rng.random() < 0.20:
-                day = self.rng.choice([0, 1, 2, 3])  # Mo-Do
-                free_wishes = [day]
+                free_wishes = [self.rng.choice([0, 1, 2, 3])]
 
             teachers.append(self._make_teacher(
                 subjects=subjects,

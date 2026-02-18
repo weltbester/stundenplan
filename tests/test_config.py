@@ -60,7 +60,7 @@ class TestDefaultConfig:
         assert config.school_type == SchoolType.GYMNASIUM
         assert config.bundesland == "NRW"
         assert config.grades.total_classes == 36
-        assert config.teachers.total_count == 105
+        assert config.teachers.total_count == 60
 
     def test_room_get_capacity_special(self):
         """get_capacity gibt korrekte Kapazität für Fachräume zurück."""
@@ -142,7 +142,7 @@ class TestPydanticValidation:
         """TeacherConfig mit Defaults ist valide."""
         from config.schema import TeacherConfig
         tc = TeacherConfig()
-        assert tc.total_count == 105
+        assert tc.total_count == 60
         assert tc.vollzeit_deputat == 26
 
     def test_grade_total_classes(self):
@@ -324,7 +324,7 @@ class TestFakeData:
         assert isinstance(data, dict)
         assert len(data["subjects"]) > 0
         assert len(data["classes"]) == 36
-        assert len(data["teachers"]) == 105
+        assert len(data["teachers"]) == config.teachers.total_count
 
     def test_generate_classes_count(self):
         """Anzahl generierter Klassen stimmt mit Config überein."""

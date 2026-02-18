@@ -154,12 +154,20 @@ class SchoolData(BaseModel):
                 if hours > 0:
                     subject_need[subj] = subject_need.get(subj, 0) + hours
 
-        # Fächer, die ausschließlich über Kopplungen abgedeckt werden (z.B. WPF)
-        # WPF-Stunden im Curriculum werden via Kopplung unterrichtet (kein direkter Lehrer nötig)
+        # Fächer, die über Kopplungen abgedeckt werden → kein direkter Kapazitäts-Check.
+        # Für WPF: Curriculum-Eintrag "WPF" wird via Kopplung besetzt.
+        # Für Reli/Ethik: "Religion" im Curriculum entspricht dem Kopplungs-Pool;
+        #   der tatsächliche Bedarf je Lehrer ist wegen Gruppenaufteilung viel kleiner
+        #   (z.B. 36 Klassen × 2h → 3 Gruppen à je 12h ≠ 72h für einen Lehrer).
+        #   Die Lehrerkapazität wird separat im Kopplungs-Check (Abschnitt 4) geprüft.
         coupling_covered: set[str] = set()
         for coupling in self.couplings:
             if coupling.coupling_type == "wpf":
                 coupling_covered.add("WPF")
+            elif coupling.coupling_type == "reli_ethik":
+                # Alle Fächer der Gruppen (Religion, Ethik) vom Haupt-Check ausschließen
+                for group in coupling.groups:
+                    coupling_covered.add(group.subject)
 
         # Lehrer-Kapazität pro Fach (Summe aller Deputate der Lehrkräfte dieses Fachs)
         subject_capacity: dict[str, int] = {}

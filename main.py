@@ -331,7 +331,7 @@ def _build_mini_school_data():
                     curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[7].items() if h > 0},
                     max_slot=sek1_max),
     ]
-    dep = 6
+    dep = 7  # 10 × 7h = 70h ≥ Gesamtbedarf (62h inkl. Kopplung)
     teachers = [
         Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
         Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),

@@ -94,9 +94,9 @@ def make_mini_school_data(seed: int = 42) -> SchoolData:
     ]
 
     # Lehrer: handverlesene Fächerkombinationen, die zusammen alle Fächer abdecken.
-    # Deputat=6 (nominal), Toleranz=10 (aus Config) → Constraint: 0-16h erlaubt.
-    # Gesamtbedarf (non-coupled): 5a=26h + 7a=30h = 56h + Kopplungslehrer 8h ≈ 64h.
-    dep = 6
+    # Deputat=7 (nominal), Toleranz=3 → Constraint: 4-10h erlaubt.
+    # 10 × 7h = 70h ≥ Gesamtbedarf inkl. Kopplung (≈ 64h) → validate_feasibility ✓
+    dep = 7
     teachers = [
         Teacher(id="T01", name="Müller, Anna",    subjects=["Deutsch", "Geschichte"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
         Teacher(id="T02", name="Schmidt, Hans",   subjects=["Mathematik", "Physik"],    deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),

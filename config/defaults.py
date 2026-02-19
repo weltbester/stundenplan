@@ -321,8 +321,8 @@ SUBJECT_METADATA: dict[str, dict] = {
         "category":         "sport",
         "is_hauptfach":     False,
         "room":             "sport",
-        "double_required":  True,
-        "double_preferred": False,
+        "double_required":  False,   # 3h/Woche ungerade → Pflicht-Doppel unmöglich
+        "double_preferred": True,
     },
     "Geschichte": {
         "short":            "Ge",

@@ -1,7 +1,13 @@
-"""Solver-Modul (CP-SAT via Google OR-Tools).
+"""Solver-Modul (CP-SAT via Google OR-Tools)."""
 
-Phase 0: Platzhalter. Implementierung erfolgt in Phase 1+.
-"""
+from .scheduler import ScheduleSolver, ScheduleSolution, ScheduleEntry, TeacherAssignment
+from .pinning import PinManager, PinnedLesson
 
-# Solver wird in Phase 1 implementiert.
-# Geplante Klasse: StundenplanSolver(config, data) -> Solution
+__all__ = [
+    "ScheduleSolver",
+    "ScheduleSolution",
+    "ScheduleEntry",
+    "TeacherAssignment",
+    "PinManager",
+    "PinnedLesson",
+]

@@ -10,6 +10,10 @@ Verwendung:
   python main.py import <datei.xlsx>      Excel importieren
   python main.py validate                 Machbarkeits-Check
   python main.py solve                    Stundenplan berechnen
+  python main.py solve --small            Schneller Test mit 2 Klassen
+  python main.py pin add <ID> <KL> <FA> <TAG> <SLOT>   Pin setzen
+  python main.py pin remove <ID> <TAG> <SLOT>           Pin entfernen
+  python main.py pin list                               Pins anzeigen
   python main.py export                   Excel + PDF exportieren
   python main.py run                      generate → solve → export
   python main.py scenario save <name>     Szenario speichern
@@ -18,6 +22,7 @@ Verwendung:
 """
 
 import sys
+import logging
 from pathlib import Path
 
 import click
@@ -30,6 +35,8 @@ console = Console()
 
 # Standard-Pfad für gespeicherte SchoolData
 DEFAULT_DATA_JSON = Path("output/school_data.json")
+DEFAULT_SOLUTION_JSON = Path("output/solution.json")
+DEFAULT_PINS_JSON = Path("output/pins.json")
 
 
 def _load_config_or_abort():
@@ -266,13 +273,330 @@ def cmd_validate(json_path: str, gen_first: bool):
 
 # ─── SOLVE ────────────────────────────────────────────────────────────────────
 
-@click.command("solve")
-def cmd_solve():
-    """Berechnet den Stundenplan (Solver — Phase 2)."""
-    console.print(
-        "[yellow]Solver wird in Phase 2 implementiert.[/yellow]\n"
-        "Aktuell: Phase 1 (Datenmodell & Fake-Daten)."
+def _build_mini_school_data():
+    """Erzeugt minimalen Datensatz (2 Klassen 5a+7a, 10 Lehrer) für schnelle Tests."""
+    from config.schema import (
+        SchoolConfig, GradeConfig, GradeDefinition, SchoolType,
+        TeacherConfig, SolverConfig,
     )
+    from config.defaults import (
+        default_time_grid, default_rooms,
+        SUBJECT_METADATA, STUNDENTAFEL_GYMNASIUM_SEK1,
+    )
+    from models.school_data import SchoolData
+    from models.subject import Subject
+    from models.room import Room
+    from models.teacher import Teacher
+    from models.school_class import SchoolClass
+    from models.coupling import Coupling, CouplingGroup
+
+    config = SchoolConfig(
+        school_name="Mini-Test",
+        school_type=SchoolType.GYMNASIUM,
+        bundesland="NRW",
+        time_grid=default_time_grid(),
+        grades=GradeConfig(grades=[
+            GradeDefinition(grade=5, num_classes=1, weekly_hours_target=30),
+            GradeDefinition(grade=7, num_classes=1, weekly_hours_target=32),
+        ]),
+        rooms=default_rooms(),
+        teachers=TeacherConfig(
+            total_count=10,
+            vollzeit_deputat=26,
+            teilzeit_percentage=0.0,
+            deputat_tolerance=3,
+        ),
+        solver=SolverConfig(time_limit_seconds=60, num_workers=4),
+    )
+    sek1_max = config.time_grid.sek1_max_slot
+
+    subjects = [
+        Subject(name=n, short_name=m["short"], category=m["category"],
+                is_hauptfach=m["is_hauptfach"], requires_special_room=m["room"],
+                double_lesson_required=m["double_required"],
+                double_lesson_preferred=m["double_preferred"])
+        for n, m in SUBJECT_METADATA.items()
+    ]
+    rooms = []
+    for rd in config.rooms.special_rooms:
+        pfx = rd.room_type[:2].upper()
+        for i in range(1, rd.count + 1):
+            rooms.append(Room(id=f"{pfx}{i}", room_type=rd.room_type,
+                              name=f"{rd.display_name} {i}"))
+    classes = [
+        SchoolClass(id="5a", grade=5, label="a",
+                    curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[5].items() if h > 0},
+                    max_slot=sek1_max),
+        SchoolClass(id="7a", grade=7, label="a",
+                    curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[7].items() if h > 0},
+                    max_slot=sek1_max),
+    ]
+    dep = 6
+    teachers = [
+        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+    ]
+    couplings = [
+        Coupling(id="reli_5", coupling_type="reli_ethik", involved_class_ids=["5a"],
+                 groups=[CouplingGroup(group_name="evangelisch", subject="Religion", hours_per_week=2),
+                         CouplingGroup(group_name="ethik", subject="Ethik", hours_per_week=2)],
+                 hours_per_week=2, cross_class=True),
+        Coupling(id="reli_7", coupling_type="reli_ethik", involved_class_ids=["7a"],
+                 groups=[CouplingGroup(group_name="evangelisch", subject="Religion", hours_per_week=2),
+                         CouplingGroup(group_name="ethik", subject="Ethik", hours_per_week=2)],
+                 hours_per_week=2, cross_class=True),
+    ]
+    return SchoolData(subjects=subjects, rooms=rooms, classes=classes,
+                      teachers=teachers, couplings=couplings, config=config)
+
+
+@click.command("solve")
+@click.option("--time-limit", default=None, type=int,
+              help="Zeitlimit in Sekunden (überschreibt Config).")
+@click.option("--small", is_flag=True, default=False,
+              help="Mini-Datensatz (2 Klassen, 8 Lehrer) für schnelle Tests.")
+@click.option("--json-path", default=str(DEFAULT_DATA_JSON),
+              help="Pfad zur SchoolData-JSON (wenn nicht --small).")
+@click.option("--output", "-o", default=str(DEFAULT_SOLUTION_JSON),
+              help="Ausgabepfad für die Lösung (JSON).")
+@click.option("--pins-path", default=str(DEFAULT_PINS_JSON),
+              help="Pfad zur Pins-JSON-Datei (optional).")
+@click.option("--diagnose", is_flag=True, default=False,
+              help="Erweiterte Diagnose bei INFEASIBLE ausgeben.")
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Solver-Log aktivieren.")
+def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose):
+    """Berechnet den Stundenplan mit CP-SAT Solver."""
+    from models.school_data import SchoolData
+    from solver.scheduler import ScheduleSolver
+    from solver.pinning import PinManager
+
+    if verbose:
+        logging.basicConfig(level=logging.INFO,
+                            format="%(levelname)s %(message)s")
+
+    # ── Daten laden ──────────────────────────────────────────────────────────
+    if small:
+        console.print("[bold]Mini-Modus:[/bold] Erzeuge 2-Klassen-Testdaten...")
+        data = _build_mini_school_data()
+    else:
+        p = Path(json_path)
+        if not p.exists():
+            console.print(
+                f"[red]Keine Datendatei gefunden: {p}[/red]\n"
+                "Verwenden Sie [bold]python main.py generate --export-json[/bold] "
+                "oder das [bold]--small[/bold] Flag."
+            )
+            sys.exit(1)
+        console.print(f"[bold]Lade Datensatz:[/bold] {p}")
+        data = SchoolData.load_json(p)
+
+    console.print(f"[dim]{data.summary()}[/dim]\n")
+
+    # ── Machbarkeits-Check ───────────────────────────────────────────────────
+    report = data.validate_feasibility()
+    if not report.is_feasible:
+        report.print_rich()
+        console.print("[red bold]Machbarkeits-Check fehlgeschlagen – Solver wird nicht gestartet.[/red bold]")
+        sys.exit(1)
+    if report.warnings:
+        report.print_rich()
+
+    # ── Zeitlimit anpassen ───────────────────────────────────────────────────
+    if time_limit is not None:
+        data.config.solver.time_limit_seconds = time_limit
+
+    # ── Pins laden ───────────────────────────────────────────────────────────
+    pin_manager = PinManager()
+    pins_file = Path(pins_path)
+    if pins_file.exists():
+        pin_manager.load_json(pins_file)
+        if len(pin_manager) > 0:
+            console.print(f"[cyan]{len(pin_manager)} Pins geladen aus {pins_file}[/cyan]")
+
+    # ── Solver starten ───────────────────────────────────────────────────────
+    console.print(
+        f"[bold]Starte Solver...[/bold] "
+        f"(Zeitlimit: {data.config.solver.time_limit_seconds}s, "
+        f"Worker: {data.config.solver.num_workers or 'auto'})"
+    )
+
+    solver = ScheduleSolver(data)
+    with console.status("[bold green]Solver läuft...[/bold green]"):
+        solution = solver.solve(pins=pin_manager.get_pins())
+
+    # ── Ergebnis anzeigen ────────────────────────────────────────────────────
+    status_color = {
+        "OPTIMAL": "green",
+        "FEASIBLE": "yellow",
+        "INFEASIBLE": "red",
+        "UNKNOWN": "red",
+        "MODEL_INVALID": "red",
+    }.get(solution.solver_status, "white")
+
+    console.print(Panel(
+        f"Status: [{status_color}]{solution.solver_status}[/{status_color}]\n"
+        f"Zeit: {solution.solve_time_seconds:.1f}s\n"
+        f"Einträge: {len(solution.entries)}\n"
+        f"Zuweisungen: {len(solution.assignments)}\n"
+        f"Variablen: {solution.num_variables} | Constraints: {solution.num_constraints}",
+        title="Solver-Ergebnis",
+        border_style=status_color,
+    ))
+
+    if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+        if diagnose:
+            console.print("[yellow]Diagnose-Modus: Prüfe Logs für Details.[/yellow]")
+        sys.exit(1)
+
+    # ── Lösung speichern ─────────────────────────────────────────────────────
+    out_path = Path(output)
+    solution.save_json(out_path)
+    console.print(f"[green]✓[/green] Lösung gespeichert: {out_path}")
+
+    # ── Zusammenfassung: Lehrer-Auslastung ───────────────────────────────────
+    table = Table(title="Lehrer-Auslastung (Top 10)", box=box.ROUNDED)
+    table.add_column("Kürzel")
+    table.add_column("Soll", justify="right")
+    table.add_column("Ist", justify="right")
+    table.add_column("Δ", justify="right")
+
+    teacher_hours: dict[str, int] = {}
+    for entry in solution.entries:
+        if not entry.is_coupling:
+            teacher_hours[entry.teacher_id] = teacher_hours.get(entry.teacher_id, 0) + 1
+    for assignment in solution.assignments:
+        pass  # hours_per_week already counted via entries
+
+    teacher_map = {t.id: t for t in data.teachers}
+    rows = []
+    for t_id, actual in teacher_hours.items():
+        teacher = teacher_map.get(t_id)
+        if teacher:
+            delta = actual - teacher.deputat
+            rows.append((t_id, teacher.deputat, actual, delta))
+
+    rows.sort(key=lambda r: abs(r[3]), reverse=True)
+    for t_id, soll, ist, delta in rows[:10]:
+        color = "green" if abs(delta) <= 1 else "yellow" if abs(delta) <= 2 else "red"
+        table.add_row(t_id, str(soll), str(ist), f"[{color}]{delta:+d}[/{color}]")
+
+    if rows:
+        console.print(table)
+
+
+# ─── PIN ──────────────────────────────────────────────────────────────────────
+
+@click.group("pin")
+def cmd_pin():
+    """Gepinnte Stunden verwalten (fixierte Unterrichtsstunden)."""
+
+
+@cmd_pin.command("add")
+@click.argument("lehrer_id")
+@click.argument("klasse")
+@click.argument("fach")
+@click.argument("tag", type=int)
+@click.argument("slot", type=int)
+@click.option("--pins-path", default=str(DEFAULT_PINS_JSON),
+              help="Pfad zur Pins-JSON-Datei.")
+def pin_add(lehrer_id: str, klasse: str, fach: str, tag: int, slot: int, pins_path: str):
+    """Setzt einen Pin: Lehrer-ID Klasse Fach Tag(0-4) Slot(1-7).
+
+    Beispiel: python main.py pin add MUE 5a Mathematik 0 1
+    """
+    from solver.pinning import PinManager, PinnedLesson
+
+    pm = PinManager()
+    p = Path(pins_path)
+    if p.exists():
+        pm.load_json(p)
+
+    pin = PinnedLesson(
+        teacher_id=lehrer_id,
+        class_id=klasse,
+        subject=fach,
+        day=tag,
+        slot_number=slot,
+    )
+    pm.add_pin(pin)
+    pm.save_json(p)
+
+    day_names = ["Mo", "Di", "Mi", "Do", "Fr"]
+    day_str = day_names[tag] if 0 <= tag <= 4 else str(tag)
+    console.print(
+        f"[green]✓[/green] Pin gesetzt: "
+        f"[bold]{lehrer_id.upper()}[/bold] unterrichtet "
+        f"[bold]{klasse}[/bold] ({fach}) am [bold]{day_str} Std.{slot}[/bold]"
+    )
+
+
+@cmd_pin.command("remove")
+@click.argument("lehrer_id")
+@click.argument("tag", type=int)
+@click.argument("slot", type=int)
+@click.option("--pins-path", default=str(DEFAULT_PINS_JSON),
+              help="Pfad zur Pins-JSON-Datei.")
+def pin_remove(lehrer_id: str, tag: int, slot: int, pins_path: str):
+    """Entfernt einen Pin: Lehrer-ID Tag(0-4) Slot(1-7)."""
+    from solver.pinning import PinManager
+
+    pm = PinManager()
+    p = Path(pins_path)
+    if not p.exists():
+        console.print("[yellow]Keine Pins-Datei gefunden.[/yellow]")
+        return
+
+    pm.load_json(p)
+    removed = pm.remove_pin(lehrer_id, tag, slot)
+    if removed:
+        pm.save_json(p)
+        console.print(f"[green]✓[/green] Pin entfernt: {lehrer_id.upper()} Tag={tag} Slot={slot}")
+    else:
+        console.print(f"[yellow]Kein passender Pin gefunden für {lehrer_id.upper()} Tag={tag} Slot={slot}[/yellow]")
+
+
+@cmd_pin.command("list")
+@click.option("--pins-path", default=str(DEFAULT_PINS_JSON),
+              help="Pfad zur Pins-JSON-Datei.")
+def pin_list(pins_path: str):
+    """Zeigt alle gesetzten Pins an."""
+    from solver.pinning import PinManager
+
+    pm = PinManager()
+    p = Path(pins_path)
+    if not p.exists():
+        console.print("[dim]Keine Pins vorhanden.[/dim]")
+        return
+
+    pm.load_json(p)
+    pins = pm.get_pins()
+
+    if not pins:
+        console.print("[dim]Keine Pins vorhanden.[/dim]")
+        return
+
+    day_names = ["Mo", "Di", "Mi", "Do", "Fr"]
+    table = Table(title=f"Gepinnte Stunden ({len(pins)})", box=box.ROUNDED)
+    table.add_column("Lehrer")
+    table.add_column("Klasse")
+    table.add_column("Fach")
+    table.add_column("Tag")
+    table.add_column("Slot", justify="right")
+
+    for pin in pins:
+        day_str = day_names[pin.day] if 0 <= pin.day <= 4 else str(pin.day)
+        table.add_row(pin.teacher_id, pin.class_id, pin.subject, day_str, str(pin.slot_number))
+
+    console.print(table)
 
 
 # ─── EXPORT ───────────────────────────────────────────────────────────────────
@@ -379,6 +703,7 @@ cli.add_command(cmd_template)
 cli.add_command(cmd_import)
 cli.add_command(cmd_validate)
 cli.add_command(cmd_solve)
+cli.add_command(cmd_pin)
 cli.add_command(cmd_export)
 cli.add_command(cmd_run)
 cli.add_command(cmd_scenario)

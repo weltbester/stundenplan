@@ -679,24 +679,127 @@ def pin_list(pins_path: str):
 
 # ─── EXPORT ───────────────────────────────────────────────────────────────────
 
+DEFAULT_EXPORT_DIR = Path("output/export")
+
+
 @click.command("export")
-def cmd_export():
-    """Exportiert den Stundenplan als Excel und PDF (Phase 4)."""
-    console.print(
-        "[yellow]Export wird in Phase 4 implementiert.[/yellow]\n"
-        "Aktuell: Phase 1 (Datenmodell & Fake-Daten)."
-    )
+@click.option(
+    "--format", "fmt", default="both",
+    type=click.Choice(["excel", "pdf", "both"]),
+    help="Ausgabeformat: excel, pdf oder both.",
+)
+@click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
+              help="Pfad zur solution.json.")
+@click.option("--data-path", default=str(DEFAULT_DATA_JSON),
+              help="Pfad zur school_data.json.")
+@click.option("--output-dir", default=str(DEFAULT_EXPORT_DIR),
+              help="Ausgabeverzeichnis für Export-Dateien.")
+def cmd_export(fmt: str, solution_path: str, data_path: str, output_dir: str):
+    """Exportiert den Stundenplan als Excel und/oder PDF."""
+    from models.school_data import SchoolData
+    from solver.scheduler import ScheduleSolution
+    from export import ExcelExporter, PdfExporter
+
+    sol_path = Path(solution_path)
+    dat_path = Path(data_path)
+    out_dir  = Path(output_dir)
+
+    # Dateien prüfen
+    for p, label in [(sol_path, "Lösung"), (dat_path, "Schuldaten")]:
+        if not p.exists():
+            console.print(f"[red]{label} nicht gefunden: {p}[/red]")
+            console.print(
+                "Tipp: [bold]python main.py solve --small[/bold] erzeugt eine Beispiel-Lösung."
+            )
+            sys.exit(1)
+
+    console.print(f"[bold]Lade Daten...[/bold]")
+    solution    = ScheduleSolution.load_json(sol_path)
+    school_data = SchoolData.load_json(dat_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Excel ────────────────────────────────────────────────────────────────
+    if fmt in ("excel", "both"):
+        xlsx_path = out_dir / "stundenplan.xlsx"
+        console.print("[bold]Excel-Export...[/bold]")
+        with console.status("[green]Excel wird erstellt...[/green]"):
+            ExcelExporter(solution, school_data).export(xlsx_path)
+        console.print(f"[green]✓[/green] Excel gespeichert: {xlsx_path}")
+
+    # ── PDF ──────────────────────────────────────────────────────────────────
+    if fmt in ("pdf", "both"):
+        console.print("[bold]PDF-Export...[/bold]")
+
+        pdf_classes  = out_dir / "klassen_stundenplaene.pdf"
+        pdf_teachers = out_dir / "lehrer_stundenplaene.pdf"
+
+        with console.status("[green]PDFs werden erstellt...[/green]"):
+            exporter = PdfExporter(solution, school_data)
+            exporter.export_class_schedules(pdf_classes)
+            exporter.export_teacher_schedules(pdf_teachers)
+
+        console.print(f"[green]✓[/green] Klassen-PDF: {pdf_classes}")
+        console.print(f"[green]✓[/green] Lehrer-PDF:  {pdf_teachers}")
+
+    console.print(f"\n[bold green]Export abgeschlossen.[/bold green] → {out_dir}/")
 
 
 # ─── RUN ──────────────────────────────────────────────────────────────────────
 
 @click.command("run")
-def cmd_run():
-    """Führt generate → solve → export aus."""
-    console.print("[bold]Pipeline: generate → solve → export[/bold]")
-    console.print(
-        "[yellow]Solver und Export werden in späteren Phasen implementiert.[/yellow]"
+@click.option("--seed", default=42, help="Zufalls-Seed.")
+@click.option("--no-soft", is_flag=True, default=False,
+              help="Nur harte Constraints (schneller).")
+@click.option(
+    "--format", "fmt", default="both",
+    type=click.Choice(["excel", "pdf", "both"]),
+    help="Ausgabeformat für den Export.",
+)
+@click.option("--output-dir", default=str(DEFAULT_EXPORT_DIR),
+              help="Ausgabeverzeichnis für Export-Dateien.")
+def cmd_run(seed: int, no_soft: bool, fmt: str, output_dir: str):
+    """Führt die komplette Pipeline aus: generate → solve → export."""
+    import subprocess
+
+    console.print(Panel(
+        "[bold]Pipeline: generate → solve → export[/bold]",
+        border_style="cyan",
+    ))
+
+    # 1. generate --export-json
+    console.print("\n[bold cyan]Schritt 1:[/bold cyan] Testdaten generieren...")
+    result = subprocess.run(
+        [sys.executable, "main.py", "generate", "--export-json", f"--seed={seed}"],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        console.print(f"[red]generate fehlgeschlagen:[/red]\n{result.stderr}")
+        sys.exit(1)
+    console.print("[green]✓[/green] Testdaten erstellt.")
+
+    # 2. solve
+    console.print("\n[bold cyan]Schritt 2:[/bold cyan] Solver starten...")
+    solve_args = [sys.executable, "main.py", "solve"]
+    if no_soft:
+        solve_args.append("--no-soft")
+    result = subprocess.run(solve_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        console.print(f"[red]solve fehlgeschlagen:[/red]\n{result.stderr or result.stdout}")
+        sys.exit(1)
+    console.print("[green]✓[/green] Lösung berechnet.")
+
+    # 3. export
+    console.print("\n[bold cyan]Schritt 3:[/bold cyan] Export...")
+    result = subprocess.run(
+        [sys.executable, "main.py", "export", f"--format={fmt}",
+         f"--output-dir={output_dir}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        console.print(f"[red]export fehlgeschlagen:[/red]\n{result.stderr}")
+        sys.exit(1)
+    console.print("[green]✓[/green] Export abgeschlossen.")
+    console.print(f"\n[bold green]Pipeline erfolgreich![/bold green] → {output_dir}/")
 
 
 # ─── SCENARIO ─────────────────────────────────────────────────────────────────

@@ -938,6 +938,8 @@ class ScheduleSolver:
         except Exception:
             pass
 
+        entries = self._assign_rooms(entries)
+
         return ScheduleSolution(
             entries=entries,
             assignments=assignments,
@@ -949,6 +951,33 @@ class ScheduleSolver:
             num_constraints=len(self._model.proto.constraints),
             config_snapshot=self.config,
         )
+
+    def _assign_rooms(self, entries: list[ScheduleEntry]) -> list[ScheduleEntry]:
+        """Ersetzt room_type-Strings durch konkrete Raum-IDs (Post-Processing).
+
+        Verteilt Räume greedy nach (day, slot_number, room_type) – pro Slot
+        werden Räume der Reihe nach vergeben (sortiert nach ID).
+        Coupling-Entries (room=None) werden unverändert durchgereicht.
+        """
+        room_ids: dict[str, list[str]] = {}
+        for room in self.data.rooms:
+            room_ids.setdefault(room.room_type, []).append(room.id)
+        for ids in room_ids.values():
+            ids.sort()
+
+        usage: dict[tuple, int] = {}
+        result = []
+        for entry in entries:
+            if entry.room is not None:
+                rtype = entry.room
+                ids = room_ids.get(rtype, [])
+                key = (entry.day, entry.slot_number, rtype)
+                idx = usage.get(key, 0)
+                room_id = ids[idx] if idx < len(ids) else f"{rtype}-?"
+                usage[key] = idx + 1
+                entry = entry.model_copy(update={"room": room_id})
+            result.append(entry)
+        return result
 
     # ─── INFEASIBLE-Diagnostik ────────────────────────────────────────────────
 

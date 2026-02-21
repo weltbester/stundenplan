@@ -35,12 +35,13 @@ class RelaxReport(BaseModel):
 class ConstraintRelaxer:
     """Systematische Diagnose bei INFEASIBLE durch schrittweise Lockerung.
 
-    Testet 5 Relaxierungen, um die Ursache von INFEASIBLE zu identifizieren:
+    Testet 6 Relaxierungen, um die Ursache von INFEASIBLE zu identifizieren:
       1. Ohne Doppelstunden-Pflicht (double_required=False für alle Fächer)
       2. Ohne Fachraum-Limits (unbegrenzte Kapazität)
       3. Ohne Kopplungen (leere Kopplungsliste)
-      4. Doppelte Deputat-Toleranz
-      5. Alle obigen kombiniert
+      4. Erweiterte Deputat-Grenzen (deputat_min auf 25% gesenkt)
+      5. Ohne Springstunden-Limit (max_gaps_per_week=0)
+      6. Alle obigen kombiniert
     """
 
     def __init__(self, school_data: SchoolData) -> None:
@@ -98,7 +99,16 @@ class ConstraintRelaxer:
             time_limit=time_limit,
         ))
 
-        # 5. Alle kombiniert
+        # 5. Ohne Springstunden-Limit
+        results.append(self._test_relaxation(
+            name="no_gap_limit",
+            description="Springstunden-Limit deaktiviert (max_gaps_per_week=0)",
+            data=self._relax_no_gap_limit(),
+            pins=pins,
+            time_limit=time_limit,
+        ))
+
+        # 6. Alle kombiniert
         results.append(self._test_relaxation(
             name="all_combined",
             description="Alle Relaxierungen kombiniert",
@@ -173,6 +183,19 @@ class ConstraintRelaxer:
             config=self.data.config,
         )
 
+    def _relax_no_gap_limit(self) -> SchoolData:
+        """Deaktiviert das harte Springstunden-Limit (max_gaps_per_week=0)."""
+        new_config = self.data.config.model_copy(deep=True)
+        new_config.solver.max_gaps_per_week = 0
+        return SchoolData(
+            subjects=self.data.subjects,
+            rooms=self.data.rooms,
+            classes=self.data.classes,
+            teachers=self.data.teachers,
+            couplings=self.data.couplings,
+            config=new_config,
+        )
+
     def _relax_wider_deputat_bounds(self) -> SchoolData:
         """Senkt deputat_min auf 25% von deputat_max für maximale Solver-Flexibilität.
 
@@ -214,6 +237,9 @@ class ConstraintRelaxer:
             t.model_copy(update={"deputat_min": max(1, round(t.deputat_max * 0.25))})
             for t in self.data.teachers
         ]
+
+        # Springstunden-Limit aufheben
+        new_config.solver.max_gaps_per_week = 0
 
         return SchoolData(
             subjects=self.data.subjects,
@@ -382,6 +408,12 @@ class ConstraintRelaxer:
             fixes.append(
                 "Deputat-Grenzen: Die Deputat-Untergrenzen sind zu eng. "
                 "Senken Sie deputat_min_fraction in der Konfiguration."
+            )
+        if by_name.get("no_gap_limit") in ("OPTIMAL", "FEASIBLE"):
+            fixes.append(
+                "Springstunden-Limit: max_gaps_per_week ist zu eng für die aktuelle "
+                "Lehrer-/Klassen-Konfiguration. Erhöhen Sie den Wert oder setzen Sie "
+                "ihn auf 0 (nur Soft-Minimierung)."
             )
 
         if fixes:

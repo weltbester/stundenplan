@@ -980,8 +980,8 @@ class TestConstraintRelaxer:
         assert isinstance(report.original_status, str)
         assert isinstance(report.relaxations, list)
         assert isinstance(report.recommendation, str)
-        assert len(report.relaxations) == 5, (
-            f"Erwartet 5 Relaxierungen, erhalten: {len(report.relaxations)}"
+        assert len(report.relaxations) == 6, (
+            f"Erwartet 6 Relaxierungen, erhalten: {len(report.relaxations)}"
         )
 
         for result in report.relaxations:

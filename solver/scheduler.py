@@ -158,6 +158,9 @@ class ScheduleSolver:
         # Kopplungs-bedeckte Fächer pro Klasse
         self._coupling_covered: dict[str, set[str]] = {}  # class_id -> set of subjects
 
+        # Springstunden-BoolVars (werden von _build_gap_vars befüllt, einmalig)
+        self._gap_vars: dict[tuple, list] = {}  # (teacher_id, day) → [is_gap BoolVar, ...]
+
         # Pins (werden von solve() gesetzt)
         self._pinned_lessons: list[PinnedLesson] = []
 
@@ -414,6 +417,8 @@ class ScheduleSolver:
         self._c11_max_hours_per_day()
         self._c12_coupling_constraints()
         self._c13_pin_constraints()
+        self._gap_vars = self._build_gap_vars()   # einmalig, für C14 + Soft
+        self._c14_gap_limit()
 
     def _c1_slot_implies_assign(self) -> None:
         """slot[t,c,s,d,h] <= assign[t,c,s]"""
@@ -579,7 +584,11 @@ class ScheduleSolver:
                 self._model.add(total <= teacher.deputat_max)
 
     def _c8_special_room_capacity(self) -> None:
-        """Fachraum-Kapazität: Nicht mehr Stunden als Räume vorhanden."""
+        """Fachraum-Kapazität: Nicht mehr Stunden als Räume vorhanden.
+
+        Berücksichtigt sowohl reguläre Slot-Variablen als auch Kopplungs-Slots,
+        da z. B. WPF-Informatik ebenfalls Informatik-Räume belegt.
+        """
         tg = self.config.time_grid
 
         # Für jede Raum-Typ und jeden Slot: max room_count simultane Nutzungen
@@ -587,6 +596,17 @@ class ScheduleSolver:
         for name, meta in SUBJECT_METADATA.items():
             if meta.get("room"):
                 room_type_for_subject[name] = meta["room"]
+
+        # Vorberechnen: welche Kopplungen welche Raumtypen pro Gruppe brauchen
+        coupling_room_types: dict[str, list[str]] = {}  # coupling_id → [rtype, ...]
+        for coupling in self.data.couplings:
+            rtypes = []
+            for group in coupling.groups:
+                rtype = room_type_for_subject.get(group.subject)
+                if rtype:
+                    rtypes.append(rtype)
+            if rtypes:
+                coupling_room_types[coupling.id] = rtypes
 
         for day in range(tg.days_per_week):
             for slot in self.sek1_slots:
@@ -598,6 +618,18 @@ class ScheduleSolver:
                         rtype = room_type_for_subject.get(s)
                         if rtype:
                             by_room_type.setdefault(rtype, []).append(var)
+
+                # Kopplungs-Slots: eine coupling_slot-Variable belegt je eine Raumeinheit
+                for coupling in self.data.couplings:
+                    rtypes = coupling_room_types.get(coupling.id)
+                    if not rtypes:
+                        continue
+                    cs_key = (coupling.id, day, h)
+                    cs_var = self._coupling_slot.get(cs_key)
+                    if cs_var is None:
+                        continue
+                    for rtype in rtypes:
+                        by_room_type.setdefault(rtype, []).append(cs_var)
 
                 for rtype, vars_ in by_room_type.items():
                     capacity = self.config.rooms.get_capacity(rtype)
@@ -926,6 +958,7 @@ class ScheduleSolver:
                                 teacher_id=assigned_teacher,
                                 class_id=class_id,
                                 subject=group.subject,
+                                room=room_type_for_subject.get(group.subject),
                                 is_coupling=True,
                                 coupling_id=coupling.id,
                             ))
@@ -953,9 +986,11 @@ class ScheduleSolver:
     def _assign_rooms(self, entries: list[ScheduleEntry]) -> list[ScheduleEntry]:
         """Ersetzt room_type-Strings durch konkrete Raum-IDs (Post-Processing).
 
-        Verteilt Räume greedy nach (day, slot_number, room_type) – pro Slot
-        werden Räume der Reihe nach vergeben (sortiert nach ID).
-        Coupling-Entries (room=None) werden unverändert durchgereicht.
+        Strategie:
+        - Gleichmäßige Auslastung: immer den am wenigsten genutzten Raum des
+          jeweiligen Typs wählen, der in diesem Slot noch frei ist.
+        - Kopplungs-Caching: alle Klassen desselben Kopplungs-Termins
+          (coupling_id + teacher_id + day + slot) bekommen denselben Raum.
         """
         room_ids: dict[str, list[str]] = {}
         for room in self.data.rooms:
@@ -963,16 +998,37 @@ class ScheduleSolver:
         for ids in room_ids.values():
             ids.sort()
 
-        usage: dict[tuple, int] = {}
+        # Gesamtauslastung je Raum (für gleichmäßige Verteilung über alle Slots)
+        total_usage: dict[str, int] = {room.id: 0 for room in self.data.rooms}
+        # Bereits belegte Räume je (day, slot, rtype) – verhindert Doppelbuchung
+        slot_used: dict[tuple, set[str]] = {}
+        # Cache für Kopplungen: (coupling_id, teacher_id, day, slot) → room_id
+        coupling_cache: dict[tuple, str] = {}
+
+        def _pick_room(rtype: str, day: int, slot: int) -> str:
+            ids = room_ids.get(rtype, [])
+            key = (day, slot, rtype)
+            used = slot_used.setdefault(key, set())
+            available = [r for r in ids if r not in used]
+            if not available:
+                return f"{rtype}-?"
+            room_id = min(available, key=lambda r: total_usage[r])
+            total_usage[room_id] += 1
+            used.add(room_id)
+            return room_id
+
         result = []
         for entry in entries:
             if entry.room is not None:
                 rtype = entry.room
-                ids = room_ids.get(rtype, [])
-                key = (entry.day, entry.slot_number, rtype)
-                idx = usage.get(key, 0)
-                room_id = ids[idx] if idx < len(ids) else f"{rtype}-?"
-                usage[key] = idx + 1
+                if entry.is_coupling and entry.coupling_id:
+                    # Gleicher Termin (coupling + Lehrer + Tag + Slot) → gleicher Raum
+                    cache_key = (entry.coupling_id, entry.teacher_id, entry.day, entry.slot_number)
+                    if cache_key not in coupling_cache:
+                        coupling_cache[cache_key] = _pick_room(rtype, entry.day, entry.slot_number)
+                    room_id = coupling_cache[cache_key]
+                else:
+                    room_id = _pick_room(rtype, entry.day, entry.slot_number)
                 entry = entry.model_copy(update={"room": room_id})
             result.append(entry)
         return result
@@ -1087,38 +1143,73 @@ class ScheduleSolver:
         if terms:
             self._model.minimize(sum(terms))
 
-    def _soft_gap_penalties(self, weight: int) -> list:
-        """Springstunden-Strafe: Lehrer hat freie Stunde zwischen zwei belegten Stunden."""
+    def _build_gap_vars(self) -> dict[tuple, list]:
+        """Erstellt is_gap BoolVars für alle Lehrer-Tag-Slot-Kombinationen.
+
+        Berücksichtigt reguläre Stunden (_slot via _sidx_teacher_day_slot) UND
+        Kopplungsstunden (_coupling_assign × _coupling_slot), damit Springstunden
+        zwischen Kopplungs- und regulären Stunden korrekt erkannt werden.
+
+        Gibt {(teacher_id, day): [is_gap BoolVar, ...]} zurück.
+        Wird einmalig in _add_constraints() aufgerufen und in self._gap_vars gecacht.
+        """
         tg = self.config.time_grid
         slot_numbers = sorted({s.slot_number for s in self.sek1_slots})
-        terms = []
+
+        # Vorberechnen: welche (coupling_id, g_idx) ist jeder Lehrer Kandidat für?
+        teacher_coupling_groups: dict[str, list[tuple]] = {}
+        for (cid, g_idx, tid) in self._coupling_assign:
+            teacher_coupling_groups.setdefault(tid, []).append((cid, g_idx))
+
+        gap_vars: dict[tuple, list] = {}
 
         for teacher in self.data.teachers:
             t = teacher.id
+            cgroups = teacher_coupling_groups.get(t, [])
+
             for day in range(tg.days_per_week):
-                # Aktive Slots für diesen Lehrer+Tag – O(1) via Index
                 active: dict[int, object] = {}
+
                 for h in slot_numbers:
-                    reg_vars = self._sidx_teacher_day_slot.get((t, day, h), [])
-                    if reg_vars:
-                        a = self._model.new_bool_var(f"soft_act_{t}_{day}_{h}")
-                        self._model.add_bool_or(reg_vars).only_enforce_if(a)
-                        self._model.add(sum(reg_vars) == 0).only_enforce_if(a.negated())
+                    # Reguläre Slots (O(1) via Index)
+                    busy_vars = list(self._sidx_teacher_day_slot.get((t, day, h), []))
+
+                    # Kopplungs-Slots: Lehrer t ist an (day, h) beschäftigt wenn
+                    # coupling_assign[cid, g, t]=1 UND coupling_slot[cid, day, h]=1
+                    for (cid, g_idx) in cgroups:
+                        ca_var = self._coupling_assign.get((cid, g_idx, t))
+                        cs_var = self._coupling_slot.get((cid, day, h))
+                        if ca_var is None or cs_var is None:
+                            continue
+                        aux = self._model.new_bool_var(
+                            f"cbact_{t}_{cid}_{g_idx}_{day}_{h}"
+                        )
+                        self._model.add_bool_and([ca_var, cs_var]).only_enforce_if(aux)
+                        self._model.add_bool_or(
+                            [ca_var.negated(), cs_var.negated()]
+                        ).only_enforce_if(aux.negated())
+                        busy_vars.append(aux)
+
+                    if busy_vars:
+                        a = self._model.new_bool_var(f"tact_{t}_{day}_{h}")
+                        self._model.add_bool_or(busy_vars).only_enforce_if(a)
+                        self._model.add(sum(busy_vars) == 0).only_enforce_if(a.negated())
                         active[h] = a
 
                 active_hs = sorted(active.keys())
                 if len(active_hs) < 3:
-                    continue  # Mindestens 3 Slots für eine Lücke nötig
+                    continue  # Mindestens 3 Slots nötig für eine potenzielle Lücke
 
+                day_gap_vars: list = []
                 for i, h in enumerate(active_hs):
                     before_vars = [active[h2] for h2 in active_hs[:i]]
-                    after_vars = [active[h2] for h2 in active_hs[i + 1:]]
+                    after_vars  = [active[h2] for h2 in active_hs[i + 1:]]
                     if not before_vars or not after_vars:
                         continue
 
-                    before = self._model.new_bool_var(f"soft_bef_{t}_{day}_{h}")
-                    after_ = self._model.new_bool_var(f"soft_aft_{t}_{day}_{h}")
-                    is_gap = self._model.new_bool_var(f"soft_gap_{t}_{day}_{h}")
+                    before = self._model.new_bool_var(f"tbef_{t}_{day}_{h}")
+                    after_ = self._model.new_bool_var(f"taft_{t}_{day}_{h}")
+                    is_gap = self._model.new_bool_var(f"tgap_{t}_{day}_{h}")
 
                     self._model.add_bool_or(before_vars).only_enforce_if(before)
                     self._model.add_bool_and(
@@ -1130,7 +1221,7 @@ class ScheduleSolver:
                         [v.negated() for v in after_vars]
                     ).only_enforce_if(after_.negated())
 
-                    # is_gap = before AND after AND NOT active[h]
+                    # is_gap = before AND after_ AND NOT active[h]
                     self._model.add_bool_and(
                         [before, after_, active[h].negated()]
                     ).only_enforce_if(is_gap)
@@ -1138,8 +1229,42 @@ class ScheduleSolver:
                         [before.negated(), after_.negated(), active[h]]
                     ).only_enforce_if(is_gap.negated())
 
-                    terms.append(is_gap * weight)
+                    day_gap_vars.append(is_gap)
 
+                if day_gap_vars:
+                    gap_vars[(t, day)] = day_gap_vars
+
+        return gap_vars
+
+    def _c14_gap_limit(self) -> None:
+        """Harter Constraint: max. X Springstunden pro Lehrer pro Woche.
+
+        Rechtlicher Richtwert in deutschen Bundesländern: i. d. R. max. 7/Woche.
+        Deaktiviert wenn max_gaps_per_week=0 (nur Soft-Minimierung aktiv).
+        """
+        max_gaps = self.config.solver.max_gaps_per_week
+        if max_gaps <= 0:
+            return
+
+        tg = self.config.time_grid
+        for teacher in self.data.teachers:
+            t = teacher.id
+            teacher_gap_vars: list = []
+            for day in range(tg.days_per_week):
+                teacher_gap_vars.extend(self._gap_vars.get((t, day), []))
+            if teacher_gap_vars:
+                self._model.add(sum(teacher_gap_vars) <= max_gaps)
+
+    def _soft_gap_penalties(self, weight: int) -> list:
+        """Springstunden-Strafe: nutzt vorberechnete _gap_vars (inkl. Kopplungen).
+
+        _gap_vars wird einmalig in _add_constraints() via _build_gap_vars() erstellt
+        und berücksichtigt sowohl reguläre als auch Kopplungsstunden.
+        """
+        terms = []
+        for vars_list in self._gap_vars.values():
+            for v in vars_list:
+                terms.append(v * weight)
         return terms
 
     def _soft_day_wish_penalties(self, weight: int) -> list:

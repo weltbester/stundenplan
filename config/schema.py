@@ -256,7 +256,7 @@ class SolverConfig(BaseModel):
     num_workers: int = Field(0, ge=0,
         description="CPU-Kerne (0=automatisch)")
     # Gewicht für Minimierung von Springstunden
-    weight_gaps: int = Field(100, ge=0,
+    weight_gaps: int = Field(200, ge=0,
         description="Gewicht: Springstunden minimieren")
     # Gewicht für gleichmäßige Verteilung der Arbeitslast
     weight_workload_balance: int = Field(50, ge=0,
@@ -277,6 +277,13 @@ class SolverConfig(BaseModel):
     # Minimiert sum(dep_max - actual): Solver strebt dep_max an; dep_min ist nur Sicherheitsboden.
     weight_deputat_deviation: int = Field(50, ge=0,
         description="Gewicht: Deputat-Auslastung maximieren (immer aktiv)")
+    # Harte Obergrenze Springstunden pro Lehrer/Woche.
+    # 0 = kein hartes Limit (empfohlen): kein deutsches Bundesland schreibt eine konkrete
+    # Zahl vor. Stark gekoppelte Lehrer (Religion, WPF) haben strukturell 10-15 Lücken/Woche,
+    # weil Kopplungszeiten durch Klassenkonflikte fixiert sind – ein enges Limit erzeugt INFEASIBLE.
+    # Wer einen schulinternen Richtwert durchsetzen möchte, kann z. B. 14 oder 20 setzen.
+    max_gaps_per_week: int = Field(0, ge=0,
+        description="Max. Springstunden pro Lehrer/Woche (0=kein Limit, nur Soft-Minimierung)")
 
 
 # ─── GESAMT-CONFIG ───

@@ -165,7 +165,7 @@ class TeacherConfig(BaseModel):
     max_gaps_per_week: int = Field(3, ge=0, le=10,
         description="Max Springstunden pro Woche (globaler Default)")
     # Erlaubte Abweichung vom Soll-Deputat (±Stunden)
-    deputat_tolerance: int = Field(1, ge=0, le=3,
+    deputat_tolerance: int = Field(4, ge=0, le=6,
         description="Erlaubte Abweichung vom Soll-Deputat (±)")
 
 

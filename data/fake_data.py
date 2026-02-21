@@ -8,6 +8,13 @@ Absichtliche Engpässe:
   3. Freitag-Cluster: 4 Teilzeit-Lehrkräfte wollen Fr frei
   4. Stark eingeschränkter Lehrer: Mo+Fr gesperrt, Di nur Std. 1-3
   5. Knapper Pool: Fach-spezifische Kapazität nahe am Bedarf
+
+Lösbarkeits-Garantien (feste Lehrkräfte im Pool):
+  - Mathematik: 2 dedizierte VZ-Lehrer → mind. 52h Kapazität
+  - Englisch: 2 dedizierte VZ-Lehrer → mind. 52h Kapazität
+  - Religion/Ethik: 3 dedizierte VZ-Lehrer (je mit regulärem Zweitfach)
+  - WPF Informatik: 1 dedizierter VZ-Lehrer für Kopplungsgruppe
+  - WPF Französisch: 1 dedizierter VZ-Lehrer für Kopplungsgruppe
 """
 
 import random
@@ -64,16 +71,15 @@ _SUBJECT_COMBOS: list[tuple[list[str], int]] = [
     (["Physik", "Informatik"], 4),
     (["Latein", "Deutsch"], 4),
     (["Geschichte", "Politik"], 4),
-    (["Kunst"], 4),
-    (["Musik"], 4),
+    (["Kunst", "Geschichte"], 4),   # Kein Kunst-Allein → Deputat via 2. Fach sicherbar
+    (["Musik", "Deutsch"], 4),      # Kein Musik-Allein → Deputat via 2. Fach sicherbar
     (["Deutsch", "Kunst"], 3),
     (["Englisch", "Geschichte"], 3),
-    (["Religion", "Geschichte"], 3),
     (["Mathematik", "Deutsch"], 3),
     (["Musik", "Kunst"], 2),
     (["Französisch", "Latein"], 2),
     (["Englisch", "Politik"], 2),
-    (["Religion", "Ethik"], 3),   # Reli/Ethik-Lehrer (Kopplung)
+    (["Biologie", "Physik"], 3),  # ersetzt Religion/Ethik-Kombos (die Kopplungs-Engpass erzeugten)
 ]
 
 _COMBO_WEIGHTS = [w for _, w in _SUBJECT_COMBOS]
@@ -206,17 +212,24 @@ class FakeDataGenerator:
     def _generate_teachers(self) -> list[Teacher]:
         """Erzeugt alle Lehrkräfte mit Engpässen gemäß Spec.
 
-        Feste Lehrkräfte (12):
+        Feste Lehrkräfte (25):
           - 2 Chemie-Lehrkräfte        (Engpass #1+#2: 52h vs. 48h Bedarf → 92%)
           - 4 Freitag-TZ               (Engpass #3: Freitag-Cluster)
           - 1 stark eingeschränkt      (Engpass #4: Mo+Fr+Di-nachmittags gesperrt)
           - 5 Sport-Lehrkräfte         (Pflicht-Abdeckung: 130h vs. 108h Bedarf)
-        Restliche (tc.total_count − 12) Lehrkräfte: gewichtete Fächerkombinationen.
+          - 2 Mathematik-VZ            (Lösbarkeits-Garantie: +52h Kapazität)
+          - 2 Englisch-VZ              (Lösbarkeits-Garantie: +52h Kapazität)
+          - 2 Religion-TZ + 1 Ethik-TZ (Kopplung: 3 TZ-Lehrer, je 1 pro Gruppe)
+          - 1 Informatik-VZ + 1 Français-VZ (WPF-Kopplungsgruppen)
+          - 2 Kunst-VZ + 2 Musik-VZ    (Lösbarkeits-Garantie: 4×26h=104h vs. 72h Bedarf)
+        Restliche (tc.total_count − 25) Lehrkräfte: gewichtete Fächerkombinationen.
+        Wichtig: _SUBJECT_COMBOS enthält KEINE Musik- oder Kunst-Allein-Einträge,
+        um Single-Subject-Deputat-Violations zu vermeiden (4×22h=88h > 72h Bedarf).
 
         Puffer-Kalkulation (Default: total=60, VZ=26h, TZ_min=12h, 30% TZ):
-          Feste: 2×26 + 4×12 + 16 + 5×26 = 246h
-          Zufällig (48): 13 TZ×12 + 35 VZ×26 = 1066h
-          Gesamt: 1312h, Bedarf: ~1212h → Puffer ≈ 8%
+          Feste: 2×26 + 4×12 + 16 + 5×26 + 4×26 + 3×12 + 2×26 + 4×26 = 542h
+          Zufällig (35): 10 TZ×12 + 25 VZ×26 = 770h (8 TZ bereits fix → nur 10 TZ verbleibend)
+          Gesamt: 1312h, Bedarf: ~1170h → Puffer ≈ 12%
         """
         tc = self.config.teachers
         teachers: list[Teacher] = []
@@ -279,13 +292,92 @@ class FakeDataGenerator:
                 deputat=tc.vollzeit_deputat,
             ))
 
-        # ── Restliche Lehrkräfte (tc.total_count − 12) ───────────────────────
-        # TZ-Deputat = Minimum für deterministischen Gesamtpuffer (~8%)
-        # TZ-Anzahl: Config-Quote minus bereits platzierte TZ (4 Freitag + 1 restricted = 5)
+        # ── Mathematik-Basisabdeckung: 2 dedizierte VZ ──────────────────────
+        # Bedarf: 144h. Fixpool sichert mind. 52h, Zufallspool ergänzt auf ~200h.
+        teachers.append(self._make_teacher(
+            subjects=["Mathematik", "Physik"],
+            deputat=tc.vollzeit_deputat,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Mathematik", "Deutsch"],
+            deputat=tc.vollzeit_deputat,
+        ))
+
+        # ── Englisch-Basisabdeckung: 2 dedizierte VZ ────────────────────────
+        # Bedarf: 120h. Fixpool sichert mind. 52h.
+        teachers.append(self._make_teacher(
+            subjects=["Englisch", "Geschichte"],
+            deputat=tc.vollzeit_deputat,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Englisch", "Politik"],
+            deputat=tc.vollzeit_deputat,
+        ))
+
+        # ── Religion/Ethik-Basisabdeckung: 3 dedizierte TZ ──────────────────
+        # Kopplung braucht je 1 Lehrer pro Gruppe (evang, kath, ethik).
+        # ACHTUNG: "Religion" und "Ethik" sind coupling-covered → kein regulärer
+        # Unterricht → Deputat fast ausschließlich über Kopplungs-Stunden erreichbar.
+        # TZ-Status (12h): reicht aus, denn 6 Kopplungsgruppen × 2h = 12h Deputat.
+        teachers.append(self._make_teacher(
+            subjects=["Religion", "Geschichte"],
+            deputat=tc.teilzeit_deputat_min,
+            is_teilzeit=True,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Religion", "Politik"],
+            deputat=tc.teilzeit_deputat_min,
+            is_teilzeit=True,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Ethik", "Geschichte"],
+            deputat=tc.teilzeit_deputat_min,
+            is_teilzeit=True,
+        ))
+
+        # ── WPF-Basisabdeckung: 2 dedizierte VZ ─────────────────────────────
+        # WPF-Kopplung hat Gruppen für Informatik und Französisch.
+        # Min. je 1 Lehrer pro WPF-Gruppe garantiert Lösbarkeit.
+        teachers.append(self._make_teacher(
+            subjects=["Informatik", "Mathematik"],
+            deputat=tc.vollzeit_deputat,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Französisch", "Englisch"],
+            deputat=tc.vollzeit_deputat,
+        ))
+
+        # ── Kunst-Basisabdeckung: 2 dedizierte VZ ───────────────────────────
+        # Bedarf: 72h. 2×26h=52h Fixpool + Zufallspool → mind. 78h Gesamtkapazität.
+        # WICHTIG: Mehrfach-Fach-Lehrer (kein Kunst-Allein), damit Deputat via
+        # Zweitfach füllbar ist. Single-Subject-Lehrer würden 4×22h=88h > 72h erzwingen.
+        teachers.append(self._make_teacher(
+            subjects=["Kunst", "Deutsch"],
+            deputat=tc.vollzeit_deputat,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Kunst", "Biologie"],
+            deputat=tc.vollzeit_deputat,
+        ))
+
+        # ── Musik-Basisabdeckung: 2 dedizierte VZ ───────────────────────────
+        # Bedarf: 72h. 2×26h=52h Fixpool + Zufallspool → mind. 78h Gesamtkapazität.
+        teachers.append(self._make_teacher(
+            subjects=["Musik", "Geschichte"],
+            deputat=tc.vollzeit_deputat,
+        ))
+        teachers.append(self._make_teacher(
+            subjects=["Musik", "Physik"],
+            deputat=tc.vollzeit_deputat,
+        ))
+
+        # ── Restliche Lehrkräfte (tc.total_count − 25) ───────────────────────
+        # TZ-Deputat = Minimum für deterministischen Gesamtpuffer (~12%)
+        # TZ-Anzahl: Config-Quote minus bereits platzierte TZ (4 Freitag + 1 restricted + 3 Reli/Ethik = 8)
         remaining = tc.total_count - len(teachers)
         num_teilzeit_remaining = max(
             0,
-            int(tc.total_count * tc.teilzeit_percentage) - 5  # 5 TZ bereits platziert
+            int(tc.total_count * tc.teilzeit_percentage) - 8  # 8 TZ bereits platziert
         )
         for i in range(remaining):
             is_tz = i < num_teilzeit_remaining

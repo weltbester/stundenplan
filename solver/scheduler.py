@@ -143,6 +143,13 @@ class ScheduleSolver:
         self._coupling_slot: dict = {}    # (coupling_id, day, slot_nr) -> BoolVar
         self._coupling_assign: dict = {}  # (coupling_id, group_idx, teacher_id) -> BoolVar
 
+        # Doppelstunden-Variablen (Phase 3)
+        self._double: dict = {}  # (teacher_id, class_id, subject, day, block_start) -> BoolVar
+
+        # Schnell-Indizes für Soft-Constraints (vermeiden O(|slots|)-Scans)
+        self._sidx_teacher_day_slot: dict = {}  # (teacher_id, day, slot_nr) → [BoolVar]
+        self._sidx_tcsd: dict = {}              # (teacher_id, class_id, subj, day) → [BoolVar]
+
         # Subject-Metadaten-Cache
         self._subject_meta: dict = {}
         for name, meta in SUBJECT_METADATA.items():
@@ -156,7 +163,12 @@ class ScheduleSolver:
 
     # ─── Öffentliche API ──────────────────────────────────────────────────────
 
-    def solve(self, pins: list[PinnedLesson] = []) -> ScheduleSolution:
+    def solve(
+        self,
+        pins: list[PinnedLesson] = [],
+        use_soft: bool = True,
+        weights: Optional[dict] = None,
+    ) -> ScheduleSolution:
         """Löst das Stundenplan-Problem und gibt eine Lösung zurück."""
         self._pinned_lessons = list(pins)
 
@@ -167,10 +179,33 @@ class ScheduleSolver:
         self._create_variables()
         self._add_constraints()
 
+        time_limit = self.config.solver.time_limit_seconds
+        num_workers = self.config.solver.num_workers or os.cpu_count() or 4
+
+        if use_soft:
+            # Warm-Start: Schnell feasible Lösung ohne Soft finden, dann als Hint verwenden
+            pre_limit = min(90, time_limit // 3)
+            pre_solver = cp_model.CpSolver()
+            pre_solver.parameters.max_time_in_seconds = pre_limit
+            pre_solver.parameters.num_workers = num_workers
+            pre_solver.parameters.log_search_progress = False
+            pre_status = pre_solver.solve(self._model)
+            if pre_status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                logger.info(f"Warm-Start: feasible Lösung in {pre_solver.wall_time:.1f}s gefunden – setze Hints")
+                for var in self._slot.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._assign.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._double.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+            else:
+                logger.warning("Warm-Start: keine feasible Lösung gefunden – Soft-Solve ohne Hints")
+
+            self._add_soft_objective(weights)
+
         # Solver konfigurieren
         cp_solver = cp_model.CpSolver()
-        cp_solver.parameters.max_time_in_seconds = self.config.solver.time_limit_seconds
-        num_workers = self.config.solver.num_workers or os.cpu_count() or 4
+        cp_solver.parameters.max_time_in_seconds = time_limit
         cp_solver.parameters.num_workers = num_workers
         cp_solver.parameters.log_search_progress = False
 
@@ -189,7 +224,8 @@ class ScheduleSolver:
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return self._extract_solution(cp_solver, elapsed, status_name)
         else:
-            self._diagnose_infeasible()
+            if status == cp_model.INFEASIBLE:
+                self._diagnose_infeasible()
             # Leere Lösung zurückgeben
             return ScheduleSolution(
                 entries=[],
@@ -244,6 +280,7 @@ class ScheduleSolver:
         """Erstellt alle Entscheidungsvariablen."""
         self._create_assign_and_slot_vars()
         self._create_coupling_vars()
+        self._create_double_vars()
 
     def _create_assign_and_slot_vars(self) -> None:
         """Ebene 1 (assign) und Ebene 2 (slot) Variablen."""
@@ -282,6 +319,11 @@ class ScheduleSolver:
                                 f"slot_{teacher.id}_{cls.id}_{subject}_{day}_{slot.slot_number}"
                             )
                             self._slot[skey] = svar
+                            # Schnell-Indizes befüllen
+                            tds_key = (teacher.id, day, slot.slot_number)
+                            self._sidx_teacher_day_slot.setdefault(tds_key, []).append(svar)
+                            tcsd_key = (teacher.id, cls.id, subject, day)
+                            self._sidx_tcsd.setdefault(tcsd_key, []).append(svar)
 
     def _create_coupling_vars(self) -> None:
         """Variablen für Kopplungen."""
@@ -313,6 +355,37 @@ class ScheduleSolver:
                     )
                     self._coupling_assign[key] = var
 
+    def _create_double_vars(self) -> None:
+        """Erzeugt double[t,c,s,day,bs]-Variablen für alle Doppelstunden-Fächer.
+
+        Wird für double_required UND double_preferred Fächer erstellt.
+        Nur wenn BEIDE Slot-Variablen (bs und bs+1) existieren.
+        """
+        tg = self.config.time_grid
+        double_subjects = {
+            n for n, m in SUBJECT_METADATA.items()
+            if m.get("double_required") or m.get("double_preferred")
+        }
+
+        # double_pairs: slot_first -> slot_second
+        double_pairs: dict[int, int] = {}
+        for db in tg.double_blocks:
+            if db.slot_second <= tg.sek1_max_slot:
+                double_pairs[db.slot_first] = db.slot_second
+
+        for (t, c, s) in self._assign:
+            if s not in double_subjects:
+                continue
+            for day in range(tg.days_per_week):
+                for bs in self.valid_double_starts:
+                    h_next = double_pairs.get(bs)
+                    if h_next is None:
+                        continue
+                    if (t, c, s, day, bs) in self._slot and (t, c, s, day, h_next) in self._slot:
+                        self._double[(t, c, s, day, bs)] = self._model.new_bool_var(
+                            f"double_{t}_{c}_{s}_{day}_{bs}"
+                        )
+
     # ─── Constraints ──────────────────────────────────────────────────────────
 
     def _add_constraints(self) -> None:
@@ -326,6 +399,7 @@ class ScheduleSolver:
         self._c7_deputat_bounds()
         self._c8_special_room_capacity()
         self._c9_double_lesson_required()
+        self._c9b_double_linkage()
         self._c10_compact_class_schedule()
         self._c11_max_hours_per_day()
         self._c12_coupling_constraints()
@@ -535,10 +609,14 @@ class ScheduleSolver:
     def _c9_double_lesson_required(self) -> None:
         """Fächer mit double_required=True dürfen nur in gültigen Doppelstunden-Blöcken stattfinden.
 
-        Korrekte Semantik:
-          - Slot h ∈ valid_double_starts (1,3,5): darf aktiv sein; aktiviert zwingend h+1
-          - Slot h+1 (zweite Hälfte, 2,4,6): darf NUR aktiv sein wenn h aktiv ist
-          - Alle anderen Slots (z.B. 7): immer 0
+        Semantik je nach N (Stunden/Woche):
+          N=1: Einzelstunde erlaubt (Warnung), keine Doppelstunden-Pflicht
+          N=2: exakt 1 Doppelstunde; Slot-7 und andere Single-Slots verboten
+          N=3: 1 Doppelstunde + 1 Einzelstunde an ANDEREM Tag als die Doppelstunde
+          N=4: exakt 2 Doppelstunden; Slot-7 verboten
+          N=5: 2 Doppelstunden + 1 Einzelstunde an anderem Tag
+
+        Immer: Bidirektionale Implication für double-Paare (bs ↔ bs+1).
         """
         tg = self.config.time_grid
 
@@ -555,9 +633,22 @@ class ScheduleSolver:
                 double_pairs[db.slot_first] = db.slot_second
                 double_seconds.add(db.slot_second)
 
+        # Slot-Nummern die weder double_start noch double_second sind (z.B. Slot 7)
+        all_slot_numbers = {s.slot_number for s in self.sek1_slots}
+        single_only_slots = all_slot_numbers - set(double_pairs.keys()) - double_seconds
+
+        # Curriculum-Lookup: (class_id, subject) -> hours
+        curriculum: dict[tuple, int] = {}
+        for cls in self.data.classes:
+            for subj, hrs in cls.curriculum.items():
+                curriculum[(cls.id, subj)] = hrs
+
         for (t, c, s, day, h), var in self._slot.items():
             if s not in double_required_subjects:
                 continue
+
+            n = curriculum.get((c, s), 0)
+            n_rest = n % 2  # 0 = gerade; 1 = ungerade
 
             if h in self.valid_double_starts:
                 # Erste Hälfte: wenn aktiv, muss zweite Hälfte auch aktiv sein
@@ -572,11 +663,57 @@ class ScheduleSolver:
                         self._model.add(var == 0)
             elif h in double_seconds:
                 # Zweite Hälfte: wird durch Implication von der ersten Hälfte gesteuert.
-                # Kein separates Verbot nötig – die Paar-Implication oben reicht.
                 pass
             else:
-                # Kein gültiger Doppelstunden-Slot (z.B. Slot 7) → immer 0
-                self._model.add(var == 0)
+                # Single-only-Slot (z.B. Slot 7)
+                if n_rest == 0:
+                    # Gerade Stundenzahl: kein Einzelslot benötigt
+                    self._model.add(var == 0)
+                elif n <= 1:
+                    # N=1: nur Einzelstunde möglich, erlaubt
+                    pass
+                else:
+                    # N_rest=1 und N>=3: Einzelstunde erlaubt, aber nicht am selben Tag
+                    # wie eine Doppelstunde dieses Fachs
+                    for bs in self.valid_double_starts:
+                        bs_key = (t, c, s, day, bs)
+                        if bs_key in self._slot:
+                            # slot[bs] + slot[h] <= 1 (am selben Tag)
+                            self._model.add(self._slot[bs_key] + var <= 1)
+
+    def _c9b_double_linkage(self) -> None:
+        """Verknüpft double[]-Variablen bidirektional mit den slot[]-Paaren.
+
+        Für alle double-Fächer (required + preferred):
+          double[t,c,s,d,bs] = 1 ↔ slot[t,c,s,d,bs]=1 AND slot[t,c,s,d,bs+1]=1
+
+        Implementiert durch drei Implications:
+          1. double → slot_bs
+          2. double → slot_bs+1
+          3. slot_bs + slot_bs+1 - 1 ≤ double
+        """
+        tg = self.config.time_grid
+
+        double_pairs: dict[int, int] = {}
+        for db in tg.double_blocks:
+            if db.slot_second <= tg.sek1_max_slot:
+                double_pairs[db.slot_first] = db.slot_second
+
+        for (t, c, s, day, bs), dvar in self._double.items():
+            h_next = double_pairs.get(bs)
+            if h_next is None:
+                continue
+            slot_bs = self._slot.get((t, c, s, day, bs))
+            slot_bs_next = self._slot.get((t, c, s, day, h_next))
+            if slot_bs is None or slot_bs_next is None:
+                continue
+
+            # double → slot_bs
+            self._model.add_implication(dvar, slot_bs)
+            # double → slot_bs+1
+            self._model.add_implication(dvar, slot_bs_next)
+            # slot_bs + slot_bs+1 - 1 ≤ double  (i.e. both active → double)
+            self._model.add(slot_bs + slot_bs_next - 1 <= dvar)
 
     def _c10_compact_class_schedule(self) -> None:
         """Keine Lücken im Stundenplan einer Klasse (Stunden sind kompakt)."""
@@ -837,7 +974,16 @@ class ScheduleSolver:
             f"Gesamtdeputat: {total_dep}h | Gesamtbedarf: {total_need}h | Δ={delta:+d}h"
         )
 
-        # Pro Fach: Lehrer-Kapazität vs. Bedarf
+        # Kopplungs-abgedeckte Fächer bestimmen (diese brauchen keinen direkten Lehrer)
+        coupling_covered: set[str] = set()
+        for coupling in self.data.couplings:
+            if coupling.coupling_type == "wpf":
+                coupling_covered.add("WPF")
+            elif coupling.coupling_type == "reli_ethik":
+                for group in coupling.groups:
+                    coupling_covered.add(group.subject)
+
+        # Pro Fach: Lehrer-Kapazität vs. Bedarf (nur nicht-Kopplungs-Fächer)
         subject_need: dict[str, int] = {}
         for cls in self.data.classes:
             for subj, hours in cls.curriculum.items():
@@ -850,6 +996,8 @@ class ScheduleSolver:
                 subject_cap[subj] = subject_cap.get(subj, 0) + teacher.deputat
 
         for subj, need in sorted(subject_need.items()):
+            if subj in coupling_covered:
+                continue  # Wird via Kopplung abgedeckt, kein direkter Kapazitäts-Check
             cap = subject_cap.get(subj, 0)
             if cap < need:
                 logger.error(
@@ -875,3 +1023,158 @@ class ScheduleSolver:
                         f"  Fachraum '{rtype}': Bedarf {need}h > "
                         f"verfügbare Slots {max_slots} ({cap} Räume × {total_slots})"
                     )
+
+    # ─── Soft-Constraints / Zielfunktion ──────────────────────────────────────
+
+    def _add_soft_objective(self, weights: Optional[dict] = None) -> None:
+        """Fügt weiche Zielfunktion (Minimierung) zum Modell hinzu.
+
+        Gewichte können über den weights-Parameter überschrieben werden.
+        """
+        sc = self.config.solver
+        w = {
+            "gaps":           sc.weight_gaps,
+            "day_wishes":     sc.weight_day_wishes,
+            "double_lessons": sc.weight_double_lessons,
+            "subject_spread": sc.weight_subject_spread,
+        }
+        if weights:
+            w.update(weights)
+
+        terms = []
+        if w["gaps"] > 0:
+            terms.extend(self._soft_gap_penalties(w["gaps"]))
+        if w["day_wishes"] > 0:
+            terms.extend(self._soft_day_wish_penalties(w["day_wishes"]))
+        if w["double_lessons"] > 0:
+            terms.extend(self._soft_double_preferred_bonuses(w["double_lessons"]))
+        if w["subject_spread"] > 0:
+            terms.extend(self._soft_subject_spread_penalties(w["subject_spread"]))
+
+        if terms:
+            self._model.minimize(sum(terms))
+
+    def _soft_gap_penalties(self, weight: int) -> list:
+        """Springstunden-Strafe: Lehrer hat freie Stunde zwischen zwei belegten Stunden."""
+        tg = self.config.time_grid
+        slot_numbers = sorted({s.slot_number for s in self.sek1_slots})
+        terms = []
+
+        for teacher in self.data.teachers:
+            t = teacher.id
+            for day in range(tg.days_per_week):
+                # Aktive Slots für diesen Lehrer+Tag – O(1) via Index
+                active: dict[int, object] = {}
+                for h in slot_numbers:
+                    reg_vars = self._sidx_teacher_day_slot.get((t, day, h), [])
+                    if reg_vars:
+                        a = self._model.new_bool_var(f"soft_act_{t}_{day}_{h}")
+                        self._model.add_bool_or(reg_vars).only_enforce_if(a)
+                        self._model.add(sum(reg_vars) == 0).only_enforce_if(a.negated())
+                        active[h] = a
+
+                active_hs = sorted(active.keys())
+                if len(active_hs) < 3:
+                    continue  # Mindestens 3 Slots für eine Lücke nötig
+
+                for i, h in enumerate(active_hs):
+                    before_vars = [active[h2] for h2 in active_hs[:i]]
+                    after_vars = [active[h2] for h2 in active_hs[i + 1:]]
+                    if not before_vars or not after_vars:
+                        continue
+
+                    before = self._model.new_bool_var(f"soft_bef_{t}_{day}_{h}")
+                    after_ = self._model.new_bool_var(f"soft_aft_{t}_{day}_{h}")
+                    is_gap = self._model.new_bool_var(f"soft_gap_{t}_{day}_{h}")
+
+                    self._model.add_bool_or(before_vars).only_enforce_if(before)
+                    self._model.add_bool_and(
+                        [v.negated() for v in before_vars]
+                    ).only_enforce_if(before.negated())
+
+                    self._model.add_bool_or(after_vars).only_enforce_if(after_)
+                    self._model.add_bool_and(
+                        [v.negated() for v in after_vars]
+                    ).only_enforce_if(after_.negated())
+
+                    # is_gap = before AND after AND NOT active[h]
+                    self._model.add_bool_and(
+                        [before, after_, active[h].negated()]
+                    ).only_enforce_if(is_gap)
+                    self._model.add_bool_or(
+                        [before.negated(), after_.negated(), active[h]]
+                    ).only_enforce_if(is_gap.negated())
+
+                    terms.append(is_gap * weight)
+
+        return terms
+
+    def _soft_day_wish_penalties(self, weight: int) -> list:
+        """Strafe wenn Lehrer an einem bevorzugt freien Tag unterrichtet."""
+        tg = self.config.time_grid
+        terms = []
+
+        for teacher in self.data.teachers:
+            if not teacher.preferred_free_days:
+                continue
+            t = teacher.id
+            for pref_day in teacher.preferred_free_days:
+                if pref_day < 0 or pref_day >= tg.days_per_week:
+                    continue
+                day_vars = [
+                    self._slot[k] for k in self._slot
+                    if k[0] == t and k[3] == pref_day
+                ]
+                if day_vars:
+                    has_lesson = self._model.new_bool_var(
+                        f"soft_daywish_{t}_{pref_day}"
+                    )
+                    self._model.add_bool_or(day_vars).only_enforce_if(has_lesson)
+                    self._model.add(sum(day_vars) == 0).only_enforce_if(
+                        has_lesson.negated()
+                    )
+                    terms.append(has_lesson * weight)
+
+        return terms
+
+    def _soft_double_preferred_bonuses(self, weight: int) -> list:
+        """Bonus für Doppelstunden bei double_preferred-Fächern (negativer Zielfunktionsterm)."""
+        double_preferred = {
+            n for n, m in SUBJECT_METADATA.items()
+            if m.get("double_preferred")
+        }
+        terms = []
+        for (t, c, s, day, bs), dvar in self._double.items():
+            if s in double_preferred:
+                terms.append(-weight * dvar)
+        return terms
+
+    def _soft_subject_spread_penalties(self, weight: int) -> list:
+        """Strafe wenn ein Hauptfach an zu vielen verschiedenen Tagen unterrichtet wird.
+
+        Zählt die Tage, an denen jedes Hauptfach in jeder Klasse vorkommt.
+        Je mehr Tage, desto höher die Strafe (fördert Bündelung in Doppelstunden).
+        """
+        tg = self.config.time_grid
+        hauptfach_subjects = {
+            n for n, m in SUBJECT_METADATA.items()
+            if m.get("is_hauptfach")
+        }
+        terms = []
+
+        for (t, c, s) in self._assign:
+            if s not in hauptfach_subjects:
+                continue
+            for day in range(tg.days_per_week):
+                day_vars = self._sidx_tcsd.get((t, c, s, day), [])
+                if day_vars:
+                    day_active = self._model.new_bool_var(
+                        f"soft_spread_{t}_{c}_{s}_{day}"
+                    )
+                    self._model.add_bool_or(day_vars).only_enforce_if(day_active)
+                    self._model.add(sum(day_vars) == 0).only_enforce_if(
+                        day_active.negated()
+                    )
+                    terms.append(day_active * weight)
+
+        return terms

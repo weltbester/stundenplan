@@ -150,7 +150,7 @@ class TestMiniFeasible:
     def test_mini_feasible(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         assert solution.solver_status in ("OPTIMAL", "FEASIBLE"), (
             f"Solver konnte keine Lösung finden: {solution.solver_status}\n"
             f"Variablen: {solution.num_variables}, Constraints: {solution.num_constraints}"
@@ -159,13 +159,13 @@ class TestMiniFeasible:
     def test_solution_has_entries(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         assert len(solution.entries) > 0, "Lösung hat keine Einträge"
 
     def test_solution_has_assignments(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         assert len(solution.assignments) > 0, "Lösung hat keine Zuweisungen"
 
 
@@ -176,7 +176,7 @@ class TestNoConflicts:
     def solution(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        return solver.solve()
+        return solver.solve(use_soft=False)
 
     def test_no_teacher_conflict(self, solution):
         """Kein Lehrer wird doppelt belegt."""
@@ -230,7 +230,7 @@ class TestCurriculumSatisfied:
     def solution_and_data(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         return solution, data
 
     def test_curriculum_satisfied(self, solution_and_data):
@@ -275,7 +275,7 @@ class TestDeputat:
     def solution_and_data(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         return solution, data
 
     def test_deputat_respected(self, solution_and_data):
@@ -333,7 +333,7 @@ class TestUnavailability:
         )
 
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
 
         if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
             pytest.skip("Kein FEASIBLE – Unavailability-Test übersprungen")
@@ -353,7 +353,7 @@ class TestSpecialRooms:
     def solution_and_data(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         return solution, data
 
     def test_special_rooms(self, solution_and_data):
@@ -391,7 +391,7 @@ class TestDoubleLessons:
     def solution_and_data(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         return solution, data
 
     def test_double_lesson_required(self, solution_and_data):
@@ -479,7 +479,7 @@ class TestSlotNumbers:
     def test_slot_numbers_1based(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
 
         if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
             pytest.skip("Kein FEASIBLE")
@@ -496,7 +496,7 @@ class TestSlotNumbers:
     def test_day_numbers_valid(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
 
         if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
             pytest.skip("Kein FEASIBLE")
@@ -623,7 +623,7 @@ class TestSolutionPersistence:
     def test_save_load_json(self, tmp_path):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
 
         if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
             pytest.skip("Kein FEASIBLE")
@@ -638,7 +638,7 @@ class TestSolutionPersistence:
     def test_get_class_schedule(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
 
         if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
             pytest.skip("Kein FEASIBLE")
@@ -650,7 +650,7 @@ class TestSolutionPersistence:
     def test_get_teacher_schedule(self):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
 
         if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
             pytest.skip("Kein FEASIBLE")
@@ -661,6 +661,340 @@ class TestSolutionPersistence:
         t_id = solution.entries[0].teacher_id
         entries = solution.get_teacher_schedule(t_id)
         assert all(e.teacher_id == t_id for e in entries)
+
+
+# ─── Phase 3 Tests ────────────────────────────────────────────────────────────
+
+class TestDoubleVars:
+    """Phase 3: double[]-Variablen werden korrekt erstellt und verknüpft."""
+
+    @pytest.fixture(scope="class")
+    def solver_with_vars(self):
+        data = make_mini_school_data()
+        s = ScheduleSolver(data)
+        s._build_slot_index()
+        s._build_coupling_coverage()
+        s._create_variables()
+        return s
+
+    def test_double_vars_created_for_required(self, solver_with_vars):
+        """double-Variablen existieren für double_required-Fächer."""
+        double_subjects_required = {
+            n for n, m in SUBJECT_METADATA.items() if m.get("double_required")
+        }
+        if not double_subjects_required:
+            pytest.skip("Keine double_required-Fächer im SUBJECT_METADATA")
+
+        # Mindestens eine double-Variable für required-Fächer vorhanden
+        double_required_keys = [
+            (t, c, s, d, bs)
+            for (t, c, s, d, bs) in solver_with_vars._double
+            if s in double_subjects_required
+        ]
+        assert len(double_required_keys) > 0, (
+            "Keine double-Variablen für double_required-Fächer erstellt"
+        )
+
+    def test_double_vars_created_for_preferred(self, solver_with_vars):
+        """double-Variablen existieren für double_preferred-Fächer."""
+        double_subjects_preferred = {
+            n for n, m in SUBJECT_METADATA.items() if m.get("double_preferred")
+        }
+        if not double_subjects_preferred:
+            pytest.skip("Keine double_preferred-Fächer im SUBJECT_METADATA")
+
+        # Mindestens eine double-Variable für preferred-Fächer vorhanden
+        double_preferred_keys = [
+            (t, c, s, d, bs)
+            for (t, c, s, d, bs) in solver_with_vars._double
+            if s in double_subjects_preferred
+        ]
+        assert len(double_preferred_keys) > 0, (
+            "Keine double-Variablen für double_preferred-Fächer erstellt"
+        )
+
+    def test_double_key_has_valid_block_start(self, solver_with_vars):
+        """Alle double-Variablen haben gültige Block-Start-Slots."""
+        valid_starts = solver_with_vars.valid_double_starts
+        for (t, c, s, d, bs) in solver_with_vars._double:
+            assert bs in valid_starts, (
+                f"double-Variable hat ungültigen Block-Start {bs} "
+                f"(erlaubt: {valid_starts})"
+            )
+
+    def test_double_linkage_in_solution(self):
+        """double=1 ↔ beide Slot-Hälften aktiv in der Lösung."""
+        data = make_mini_school_data()
+        solver = ScheduleSolver(data)
+        solution = solver.solve(use_soft=False)
+
+        if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Kein FEASIBLE")
+
+        # Prüfe: wo entries an aufeinanderfolgenden Slots für dasselbe Fach
+        # erscheinen, müssen beide aktiv sein
+        tg = data.config.time_grid
+        double_pairs = {db.slot_first: db.slot_second for db in tg.double_blocks
+                        if db.slot_second <= tg.sek1_max_slot}
+
+        by_key: dict[tuple, set[int]] = {}
+        for entry in solution.entries:
+            if entry.is_coupling:
+                continue
+            key = (entry.teacher_id, entry.class_id, entry.subject, entry.day)
+            by_key.setdefault(key, set()).add(entry.slot_number)
+
+        for key, slots in by_key.items():
+            for h1, h2 in double_pairs.items():
+                if h1 in slots:
+                    # Wenn erste Hälfte aktiv und Fach ist double_required:
+                    s = key[2]
+                    if SUBJECT_METADATA.get(s, {}).get("double_required"):
+                        assert h2 in slots, (
+                            f"Double-required Fach {s}: Slot {h1} aktiv aber {h2} fehlt"
+                        )
+
+    def test_no_double_at_slot7(self, solver_with_vars):
+        """Slot 7 ist kein gültiger double-Block-Start."""
+        tg = solver_with_vars.config.time_grid
+        for (t, c, s, d, bs) in solver_with_vars._double:
+            assert bs != tg.sek1_max_slot, (
+                f"double-Variable mit Block-Start = sek1_max_slot ({tg.sek1_max_slot})"
+            )
+
+
+class TestDoubleLessonsN3:
+    """N=3 Sonderfall: 1 Doppelstunde + 1 Einzelstunde an anderem Tag."""
+
+    def _make_n3_data(self):
+        """Erstellt Testdaten mit einem double_required-Fach mit 3h/Woche.
+
+        Verwendet die Standard-Mini-Daten (7a mit 32h/Woche), aber mit
+        Biologie=3h statt 2h. Mit 33h/Woche und 5 Tagen (~6-7h/Tag) ist
+        Slot 7 erreichbar (c10-compact kompatibel).
+        """
+        base = make_mini_school_data()
+        sek1_max = base.config.time_grid.sek1_max_slot
+
+        # Klasse 7a: Biologie von 2h auf 3h erhöhen (N=3 für double_required)
+        new_classes = []
+        for cls in base.classes:
+            if cls.id == "7a":
+                curriculum = dict(cls.curriculum)
+                curriculum["Biologie"] = 3  # war 2h → jetzt 3h (N=3 Fall)
+                new_classes.append(SchoolClass(
+                    id=cls.id, grade=cls.grade, label=cls.label,
+                    curriculum=curriculum, max_slot=sek1_max,
+                ))
+            else:
+                new_classes.append(cls)
+
+        return SchoolData(
+            subjects=base.subjects,
+            rooms=base.rooms,
+            classes=new_classes,
+            teachers=base.teachers,
+            couplings=base.couplings,
+            config=base.config,
+        )
+
+    def test_n3_feasible(self):
+        """Datensatz mit N=3 double_required-Fach ist lösbar."""
+        data = self._make_n3_data()
+        report = data.validate_feasibility()
+        if not report.is_feasible:
+            pytest.skip("N=3-Testdaten nicht machbar (validate_feasibility fehlgeschlagen)")
+
+        solver = ScheduleSolver(data)
+        solution = solver.solve(use_soft=False)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE"), (
+            f"N=3 Fach nicht lösbar: {solution.solver_status}"
+        )
+
+    def test_n3_single_on_different_day(self):
+        """Bei N=3 double_required: Einzelstunde ist an anderem Tag als Doppelstunde."""
+        data = self._make_n3_data()
+        report = data.validate_feasibility()
+        if not report.is_feasible:
+            pytest.skip("N=3-Testdaten nicht machbar")
+
+        solver = ScheduleSolver(data)
+        solution = solver.solve(use_soft=False)
+
+        if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Kein FEASIBLE für N=3-Test")
+
+        tg = data.config.time_grid
+        double_pairs = {db.slot_first: db.slot_second for db in tg.double_blocks
+                        if db.slot_second <= tg.sek1_max_slot}
+        double_starts = set(double_pairs.keys())
+        double_seconds = set(double_pairs.values())
+
+        # Biologie-Einträge sammeln
+        bio_by_day: dict[int, set[int]] = {}
+        for entry in solution.entries:
+            if entry.subject == "Biologie" and not entry.is_coupling:
+                bio_by_day.setdefault(entry.day, set()).add(entry.slot_number)
+
+        # Finde Doppelstunden-Tag und Einzelstunden-Tag
+        double_days = []
+        single_days = []
+        for day, slots in bio_by_day.items():
+            has_double = any(h in double_starts and (h + 1) in slots for h in slots)
+            if has_double:
+                double_days.append(day)
+            else:
+                single_days.append(day)
+
+        if not double_days or not single_days:
+            # Könnte sein dass 3h anders aufgeteilt wurde
+            pytest.skip("Keine klare Doppelstunde/Einzelstunde-Trennung erkennbar")
+
+        # Einzelstunde darf nicht am selben Tag wie Doppelstunde sein
+        for sd in single_days:
+            assert sd not in double_days, (
+                f"Biologie: Einzelstunde (Tag {sd}) am selben Tag wie Doppelstunde"
+            )
+
+
+class TestSoftConstraints:
+    """Weiche Constraints: Solver findet Lösung mit und ohne Soft-Optimierung."""
+
+    @pytest.fixture(scope="class")
+    def solution_soft(self):
+        data = make_mini_school_data()
+        data.config.solver.time_limit_seconds = 15  # Kurz für Tests
+        solver = ScheduleSolver(data)
+        return solver.solve(use_soft=True)
+
+    @pytest.fixture(scope="class")
+    def solution_hard_only(self):
+        data = make_mini_school_data()
+        solver = ScheduleSolver(data)
+        return solver.solve(use_soft=False)
+
+    def test_soft_feasible(self, solution_soft):
+        """Lösung mit Soft-Constraints ist FEASIBLE oder OPTIMAL."""
+        assert solution_soft.solver_status in ("OPTIMAL", "FEASIBLE"), (
+            f"Soft-Solver konnte keine Lösung finden: {solution_soft.solver_status}"
+        )
+
+    def test_no_soft_feasible(self, solution_hard_only):
+        """Lösung ohne Soft-Constraints ist FEASIBLE oder OPTIMAL."""
+        assert solution_hard_only.solver_status in ("OPTIMAL", "FEASIBLE"), (
+            f"Hard-only-Solver konnte keine Lösung finden: {solution_hard_only.solver_status}"
+        )
+
+    def test_soft_has_objective_value(self, solution_soft):
+        """Soft-Lösung hat einen Zielfunktionswert (objective_value)."""
+        if solution_soft.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Kein FEASIBLE")
+        # Bei Soft sollte objective_value gesetzt sein
+        # (kann None sein wenn keine Soft-Terms vorhanden)
+        # Zumindest prüfen dass es numerisch ist falls gesetzt
+        if solution_soft.objective_value is not None:
+            assert isinstance(solution_soft.objective_value, (int, float)), (
+                f"objective_value ist kein Zahl: {type(solution_soft.objective_value)}"
+            )
+
+    def test_custom_weights_feasible(self):
+        """Lösung mit überschriebenen Gewichten ist FEASIBLE."""
+        data = make_mini_school_data()
+        data.config.solver.time_limit_seconds = 15  # Kurz für Tests
+        solver = ScheduleSolver(data)
+        solution = solver.solve(
+            use_soft=True,
+            weights={"gaps": 200, "day_wishes": 10},
+        )
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE"), (
+            f"Custom-weights-Solver konnte keine Lösung finden: {solution.solver_status}"
+        )
+
+    def test_zero_weights_feasible(self):
+        """Lösung mit allen Gewichten=0 (keine Soft-Terms) ist FEASIBLE."""
+        data = make_mini_school_data()
+        solver = ScheduleSolver(data)
+        solution = solver.solve(
+            use_soft=True,
+            weights={"gaps": 0, "day_wishes": 0, "double_lessons": 0, "subject_spread": 0},
+        )
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE"), (
+            f"Zero-weights-Solver konnte keine Lösung finden: {solution.solver_status}"
+        )
+
+
+class TestConstraintRelaxer:
+    """ConstraintRelaxer erstellt korrekte Berichte."""
+
+    def test_relaxer_on_feasible(self):
+        """Relaxer läuft auf feasiblem Problem durch und gibt validen Report zurück.
+
+        Hinweis: Relaxierungen können INFEASIBLE ergeben auch wenn das Original
+        lösbar ist (z.B. 'no_couplings' bricht Deputat-Minima für Reli/Ethik-Lehrer).
+        Wir prüfen nur, dass der Relaxer terminiert und valide Statūs liefert.
+        """
+        from solver.constraint_relaxer import ConstraintRelaxer
+
+        data = make_mini_school_data()
+        # Verifizieren dass das Problem überhaupt lösbar ist
+        solver = ScheduleSolver(data)
+        solution = solver.solve(use_soft=False)
+        if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Basis-Problem nicht FEASIBLE – Relaxer-Test übersprungen")
+
+        relaxer = ConstraintRelaxer(data)
+        report = relaxer.diagnose(time_limit=15)
+
+        # Jede Relaxierung hat einen validen Status (kein Python-Error)
+        valid_statuses = {"OPTIMAL", "FEASIBLE", "INFEASIBLE", "UNKNOWN"}
+        for result in report.relaxations:
+            assert result.status in valid_statuses, (
+                f"Relaxierung '{result.name}' hat unbekannten Status: {result.status}"
+            )
+
+        # Mindestens eine Relaxierung sollte FEASIBLE sein (da Original lösbar)
+        feasible_relaxations = [
+            r for r in report.relaxations
+            if r.status in ("OPTIMAL", "FEASIBLE")
+        ]
+        assert len(feasible_relaxations) >= 1, (
+            "Keine einzige Relaxierung liefert FEASIBLE – das ist ungewöhnlich"
+        )
+
+    def test_relaxer_report_structure(self):
+        """RelaxReport hat korrekte Struktur und Felder."""
+        from solver.constraint_relaxer import ConstraintRelaxer, RelaxReport, RelaxResult
+
+        data = make_mini_school_data()
+        relaxer = ConstraintRelaxer(data)
+        report = relaxer.diagnose(time_limit=10)
+
+        # Typ-Prüfung
+        assert isinstance(report, RelaxReport)
+        assert isinstance(report.original_status, str)
+        assert isinstance(report.relaxations, list)
+        assert isinstance(report.recommendation, str)
+        assert len(report.relaxations) == 5, (
+            f"Erwartet 5 Relaxierungen, erhalten: {len(report.relaxations)}"
+        )
+
+        for result in report.relaxations:
+            assert isinstance(result, RelaxResult)
+            assert result.name
+            assert result.description
+            assert result.status in ("OPTIMAL", "FEASIBLE", "INFEASIBLE", "UNKNOWN")
+            assert result.solve_time >= 0.0
+
+    def test_relaxer_recommendation_nonempty(self):
+        """Empfehlung ist nicht leer."""
+        from solver.constraint_relaxer import ConstraintRelaxer
+
+        data = make_mini_school_data()
+        relaxer = ConstraintRelaxer(data)
+        report = relaxer.diagnose(time_limit=10)
+
+        assert report.recommendation, "Empfehlung ist leer"
+        assert len(report.recommendation) > 10
 
 
 @pytest.mark.slow
@@ -678,7 +1012,7 @@ class TestFull36Classes:
 
         t0 = time.time()
         solver = ScheduleSolver(data)
-        solution = solver.solve()
+        solution = solver.solve(use_soft=False)
         elapsed = time.time() - t0
 
         assert elapsed <= 310, f"Solver zu langsam: {elapsed:.1f}s"

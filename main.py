@@ -358,6 +358,27 @@ def _build_mini_school_data():
                       teachers=teachers, couplings=couplings, config=config)
 
 
+def _parse_weights(s: str) -> dict:
+    """Parst Gewichte aus einem String wie 'gaps=200,compact=50'."""
+    result = {}
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise click.BadParameter(
+                f"Ungültiges Format: '{part}'. Erwartet: 'schlüssel=wert'"
+            )
+        k, v = part.split("=", 1)
+        try:
+            result[k.strip()] = int(v.strip())
+        except ValueError:
+            raise click.BadParameter(
+                f"Ungültiger Wert für '{k.strip()}': '{v.strip()}' – muss eine ganze Zahl sein."
+            )
+    return result
+
+
 @click.command("solve")
 @click.option("--time-limit", default=None, type=int,
               help="Zeitlimit in Sekunden (überschreibt Config).")
@@ -370,10 +391,15 @@ def _build_mini_school_data():
 @click.option("--pins-path", default=str(DEFAULT_PINS_JSON),
               help="Pfad zur Pins-JSON-Datei (optional).")
 @click.option("--diagnose", is_flag=True, default=False,
-              help="Erweiterte Diagnose bei INFEASIBLE ausgeben.")
+              help="Erweiterte Diagnose bei INFEASIBLE: ConstraintRelaxer starten.")
 @click.option("--verbose", "-v", is_flag=True, default=False,
               help="Solver-Log aktivieren.")
-def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose):
+@click.option("--no-soft", is_flag=True, default=False,
+              help="Nur harte Constraints (keine Soft-Optimierung).")
+@click.option("--weights", default=None,
+              help="Gewichte überschreiben, z.B. 'gaps=200,double_lessons=50'.")
+def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose,
+              no_soft, weights):
     """Berechnet den Stundenplan mit CP-SAT Solver."""
     from models.school_data import SchoolData
     from solver.scheduler import ScheduleSolver
@@ -422,16 +448,32 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
         if len(pin_manager) > 0:
             console.print(f"[cyan]{len(pin_manager)} Pins geladen aus {pins_file}[/cyan]")
 
+    # ── Gewichte parsen ──────────────────────────────────────────────────────
+    parsed_weights = None
+    if weights:
+        try:
+            parsed_weights = _parse_weights(weights)
+        except click.BadParameter as e:
+            console.print(f"[red bold]Ungültige Gewichte:[/red bold] {e}")
+            sys.exit(1)
+
     # ── Solver starten ───────────────────────────────────────────────────────
+    use_soft = not no_soft
+    soft_label = "mit Soft-Constraints" if use_soft else "nur harte Constraints"
     console.print(
         f"[bold]Starte Solver...[/bold] "
-        f"(Zeitlimit: {data.config.solver.time_limit_seconds}s, "
+        f"({soft_label}, "
+        f"Zeitlimit: {data.config.solver.time_limit_seconds}s, "
         f"Worker: {data.config.solver.num_workers or 'auto'})"
     )
 
     solver = ScheduleSolver(data)
     with console.status("[bold green]Solver läuft...[/bold green]"):
-        solution = solver.solve(pins=pin_manager.get_pins())
+        solution = solver.solve(
+            pins=pin_manager.get_pins(),
+            use_soft=use_soft,
+            weights=parsed_weights,
+        )
 
     # ── Ergebnis anzeigen ────────────────────────────────────────────────────
     status_color = {
@@ -454,7 +496,30 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
 
     if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
         if diagnose:
-            console.print("[yellow]Diagnose-Modus: Prüfe Logs für Details.[/yellow]")
+            from solver.constraint_relaxer import ConstraintRelaxer
+            console.print("\n[bold yellow]Starte ConstraintRelaxer-Diagnose...[/bold yellow]")
+            relaxer = ConstraintRelaxer(data)
+            with console.status("[yellow]Relaxierungen werden getestet...[/yellow]"):
+                report = relaxer.diagnose(
+                    pins=pin_manager.get_pins(),
+                    time_limit=min(30, data.config.solver.time_limit_seconds),
+                )
+            rtable = Table(title="Constraint-Relaxierungen", box=box.ROUNDED)
+            rtable.add_column("Relaxierung")
+            rtable.add_column("Beschreibung")
+            rtable.add_column("Status")
+            rtable.add_column("Zeit", justify="right")
+            for r in report.relaxations:
+                color = "green" if r.status in ("OPTIMAL", "FEASIBLE") else (
+                    "yellow" if r.status == "UNKNOWN" else "red"
+                )
+                rtable.add_row(
+                    r.name, r.description,
+                    f"[{color}]{r.status}[/{color}]",
+                    f"{r.solve_time:.1f}s",
+                )
+            console.print(rtable)
+            console.print(f"\n[bold]Empfehlung:[/bold] {report.recommendation}")
         sys.exit(1)
 
     # ── Lösung speichern ─────────────────────────────────────────────────────
@@ -471,10 +536,23 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
 
     teacher_hours: dict[str, int] = {}
     for entry in solution.entries:
+        # Reguläre Stunden: 1 Entry = 1 Stunde
         if not entry.is_coupling:
             teacher_hours[entry.teacher_id] = teacher_hours.get(entry.teacher_id, 0) + 1
-    for assignment in solution.assignments:
-        pass  # hours_per_week already counted via entries
+    # Kopplungs-Stunden: Pro Kopplung die hours_per_week des Lehrers addieren
+    # (Kopplungs-Einträge werden einmal pro Klasse erstellt, nicht pro Stunde)
+    coupling_hours_per_teacher: dict[str, int] = {}
+    coupling_entries_seen: set[tuple] = set()
+    for entry in solution.entries:
+        if entry.is_coupling and entry.coupling_id:
+            key = (entry.teacher_id, entry.coupling_id, entry.day, entry.slot_number)
+            if key not in coupling_entries_seen:
+                coupling_entries_seen.add(key)
+                coupling_hours_per_teacher[entry.teacher_id] = (
+                    coupling_hours_per_teacher.get(entry.teacher_id, 0) + 1
+                )
+    for t_id, h in coupling_hours_per_teacher.items():
+        teacher_hours[t_id] = teacher_hours.get(t_id, 0) + h
 
     teacher_map = {t.id: t for t in data.teachers}
     rows = []

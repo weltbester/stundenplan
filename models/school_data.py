@@ -109,6 +109,7 @@ class SchoolData(BaseModel):
         total_deputat = sum(t.deputat for t in self.teachers)
         total_need = sum(sum(c.curriculum.values()) for c in self.classes)
 
+        tol = self.config.teachers.deputat_tolerance
         if total_need == 0:
             warnings.append("Kein Curriculum definiert – Machbarkeit kann nicht geprüft werden.")
         elif total_deputat < total_need:
@@ -121,6 +122,18 @@ class SchoolData(BaseModel):
             warnings.append(
                 f"Gesamtbilanz sehr knapp: {total_deputat}h Kapazität bei {total_need}h Bedarf "
                 f"(nur {puffer:.1f}% Puffer – Stundenplan schwer zu erstellen)."
+            )
+
+        # Deputat-Untergrenze: Summe aller Mindest-Deputate ≤ Gesamtbedarf
+        # Sonst können nicht alle Lehrer ihre Mindest-Stunden erreichen → INFEASIBLE
+        total_min_deputat = sum(max(0, t.deputat - tol) for t in self.teachers)
+        if total_min_deputat > total_need:
+            errors.append(
+                f"Deputat-Untergrenze verletzt: Summe aller Mindest-Deputate "
+                f"({total_min_deputat}h) > Gesamtbedarf ({total_need}h). "
+                f"Erhöhen Sie deputat_tolerance (aktuell {tol}h) auf mind. "
+                f"{(total_min_deputat - total_need + len(self.teachers) - 1) // len(self.teachers) + tol}h "
+                f"oder reduzieren Sie die Lehrkräfte-Anzahl."
             )
 
         # ── 3. Jeder Lehrer: verfügbare Slots ≥ Deputat ─────────────────

@@ -1242,6 +1242,32 @@ python main.py solve             # Optimiert
 ## Kontext
 Phase 0-3 fertig. Optimierte Lösung existiert.
 
+## Designentscheidungen (vereinbart, weichen vom Original-Guide ab)
+
+1. **Raum-Zuweisung (Post-Processing)**:
+   `ScheduleEntry.room` enthält nach dem Solver zunächst nur den room_type
+   (z.B. "chemie"). Vor dem Export ruft `_extract_solution()` intern
+   `_assign_rooms(entries)` auf, das konkrete Raum-IDs aus `SchoolData.rooms`
+   zuweist (z.B. "CH-1", "CH-2"). Greedy round-robin pro (day, slot, room_type).
+   Kein Solver-Umbau nötig, da der Solver bereits garantiert, dass nie mehr
+   Räume eines Typs gleichzeitig belegt sind als vorhanden.
+
+2. **Kopplungs-Gruppenname im Export**:
+   Bei reli_ethik-Kopplungen wird der group_name (z.B. "evangelisch", "ethik")
+   via `coupling_id → Coupling.groups` nachgeschlagen und im Stundenplan als
+   "Religion (ev.)" dargestellt. Bei WPF-Kopplungen entfällt das Label
+   (Fachname reicht aus). Keine Modell-Änderung nötig.
+
+3. **Score pro Lehrer = Springstunden/Woche**:
+   Kein pro-Lehrer-Solver-Score im Output. Stattdessen werden Springstunden
+   aus den entries berechnet und als Qualitätsindikator verwendet.
+   Der globale `objective_value` wird einmalig in der Übersicht genannt.
+
+4. **diff_export.py**: Nicht in Phase 4. Kommt ggf. in Phase 5/v2.
+
+5. **Raumbelegungs-Sheets**: Ein Sheet pro konkretem Fachraum (z.B. "CH-1",
+   "CH-2") — kein aggregierter Raumtyp-Plan.
+
 ## WICHTIG: Export nutzt das konfigurierte Zeitraster!
 
 Die Exports MÜSSEN das konfigurierte Zeitraster widerspiegeln:
@@ -1250,9 +1276,38 @@ Die Exports MÜSSEN das konfigurierte Zeitraster widerspiegeln:
 - Doppelstunden-Blöcke visuell zusammengefasst
 - Slot-Nummern (1-basiert) wie in der Config
 
-## export/excel_export.py (openpyxl)
+## solver/scheduler.py — Erweiterung: _assign_rooms()
 
-### Farbschema
+Neue private Methode, wird am Ende von `_extract_solution()` aufgerufen:
+```python
+def _assign_rooms(self, entries: list[ScheduleEntry]) -> list[ScheduleEntry]:
+    """Weist Fachraum-Entries konkrete Raum-IDs zu (post-processing).
+    Greedy: Pro (day, slot_number, room_type) werden Raum-IDs der Reihe
+    nach vergeben. Solver garantiert bereits ≤ N gleichzeitige Belegungen.
+    """
+    room_ids: dict[str, list[str]] = {}
+    for room in self.data.rooms:
+        room_ids.setdefault(room.room_type, []).append(room.id)
+    for ids in room_ids.values():
+        ids.sort()
+
+    usage: dict[tuple, int] = {}
+    result = []
+    for entry in entries:
+        if entry.room is not None:  # enthält noch room_type
+            rtype = entry.room
+            ids = room_ids.get(rtype, [])
+            key = (entry.day, entry.slot_number, rtype)
+            idx = usage.get(key, 0)
+            room_id = ids[idx] if idx < len(ids) else f"{rtype}-?"
+            usage[key] = idx + 1
+            entry = entry.model_copy(update={"room": room_id})
+        result.append(entry)
+    return result
+```
+
+## export/helpers.py (neu, gemeinsame Hilfsfunktionen)
+
 ```python
 COLORS = {
     "hauptfach":    "B3D4FF",
@@ -1267,87 +1322,129 @@ COLORS = {
     "coupling":     "FFFFB3",    # Kopplung
     "pause":        "FFFFFF",    # Pausenzeile
 }
+
+def build_time_grid_rows(config) -> list:
+    """Geordnete Zeilen: LessonSlot oder PauseSlot (nach jeder Stunde falls Pause)."""
+
+def get_subject_color(subject_name, subjects) -> str:
+    """Hex-Farbe anhand Subject.category."""
+
+def count_gaps(entries) -> int:
+    """Springstunden = Lücken zwischen erster/letzter Stunde pro Tag."""
+
+def detect_double_starts(entries, double_blocks) -> set[tuple[int, int]]:
+    """(day, slot) Paare, die Doppelstunden-Starts sind.
+    Erkennt: gleiche (class_id, teacher_id, subject) in slot_first + slot_second
+    eines DoubleBlock."""
+
+def get_coupling_label(entry, school_data) -> str | None:
+    """Für reli_ethik: group_name (z.B. 'evangelisch'). Für WPF: None."""
+
+def count_teacher_actual_hours(entries, teacher_id) -> int:
+    """Tatsächliche Stunden inkl. Kopplungen (de-dupliziert)."""
+```
+
+## export/excel_export.py (openpyxl)
+
+```python
+class ExcelExporter:
+    def __init__(self, solution: ScheduleSolution, school_data: SchoolData): ...
+    def export(self, output_path: Path) -> None: ...
 ```
 
 ### Sheet "Übersicht"
-- Schulname, Datum, Solver-Status, Lösungszeit
-- Lehrkräfte-Tabelle: Kürzel, Name, Fächer, Soll/Ist, Springstd, Score
-- Fachraum-Auslastung
-- Qualitätsmetriken
+- Schulname, Datum, Solver-Status, Lösungszeit, objective_value
+- Lehrkräfte-Tabelle: Kürzel | Name | Fächer | Soll | Ist | Springstd.
+  (Springstunden aus entries berechnet — kein Solver-Score pro Lehrer)
+- Fachraum-Auslastung (belegte Slots / max mögliche pro Raumtyp)
 
 ### Sheet "Klasse [X]" (pro Klasse)
 - Tabellenstruktur:
   ```
-  Stunde  | Zeit          | Mo       | Di       | Mi       | Do       | Fr
-  --------+---------------+----------+----------+----------+----------+------
-  1       | 07:35 - 08:20 | Mathe    | Deutsch  | ...
-  2       | 08:25 - 09:10 | MÜL     | SCH     |
+  Stunde  | Zeit          | Mo              | Di       | Mi       | Do       | Fr
+  --------+---------------+-----------------+----------+----------+----------+------
+  1       | 07:35 - 08:20 | Mathe           | Deutsch  | ...
+  2       | 08:25 - 09:10 | MÜL             | SCH      |
   ~~~~~~~~ Pause ~~~~~~~~~~
-  3       | 09:30 - 10:15 | ...
-  4       | 10:20 - 11:05 |
-  ~~~~~~~~ Pause ~~~~~~~~~~
-  5       | 11:20 - 12:05 |
-  6       | 12:10 - 12:55 |
-  ~~~~~~ Mittagspause ~~~~~~
-  7       | 13:15 - 14:00 |
+  3       | 09:30 - 10:15 | Religion (ev.)  | ...      (reli_ethik: Gruppenname ergänzt)
+  ...
   ```
 - Uhrzeiten und Pausen aus der Config!
 - Pausenzeilen: dünnere Zeile mit grauem Hintergrund + Label
-- Doppelstunden: vertikal verbundene Zellen
-- Farbcodierung nach Kategorie
-- Kopplungen mit "(K)" markiert
+- Doppelstunden: vertikal verbundene Zellen (via detect_double_starts)
+- Farbcodierung nach Subject.category (aus helpers.py)
+- reli_ethik-Kopplungen: "Religion (ev.)" / "Ethik" — Gruppenname via get_coupling_label()
+- WPF-Kopplungen: nur Fachname, kein Gruppenname
 
 ### Sheet "Lehrer [Kürzel]" (pro Lehrer)
 - Gleiche Tabellenstruktur mit Uhrzeiten + Pausen
-- Springstunden: ROT
-- Statistik-Box: Deputat, Springstunden, Wunschtage, Score
+- Zellinhalt: "Fach\nKlasse"
+- Springstunden: rote Hintergrundfarbe
+- Statistik-Box: Deputat Soll/Ist, Springstunden/Woche, Wunsch-freie Tage
 
-### Sheet "Raumbelegung"
-- Pro Fachraumtyp: Belegungsplan
-- Auslastungsquote
+### Sheet "Raum [ID]" (pro Fachraum-ID, z.B. "CH-1", "CH-2")
+- Gleiche Tabellenstruktur
+- Zellinhalt: "Klasse\nFach"
+- Freie Slots: hellgrau
+- Nur Fachräume (aus SchoolData.rooms) — keine normalen Klassenräume
 
 ### Formatierung
 - Spaltenbreite: Stunde=8, Zeit=15, Tage=20
-- Zeilenhöhe: 60 (Inhaltszeilen), 20 (Pausenzeilen)
+- Zeilenhöhe: 60 (Inhaltszeilen), 15 (Pausenzeilen)
 - Querformat, Druckbereich, "Auf eine Seite"
 
 ## export/pdf_export.py (fpdf2)
 
+```python
+class PdfExporter:
+    def __init__(self, solution: ScheduleSolution, school_data: SchoolData): ...
+    def export_class_schedules(self, output_path: Path) -> None: ...
+    def export_teacher_schedules(self, output_path: Path) -> None: ...
+```
+
 ### klassen_stundenplaene.pdf
 - 1 Seite pro Klasse, Querformat A4
 - Header: Schulname | Klassenname | Schuljahr
-- Tabelle MIT Uhrzeiten und Pausenzeilen
+- Tabelle MIT Uhrzeiten und Pausenzeilen (aus Config)
 - Farbcodierung
 - Footer: Datum | Seite X/Y
 
 ### lehrer_stundenplaene.pdf
 - 1 Seite pro Lehrer, Querformat A4
-- Header: Schulname | "MÜL — Müller, Hans" | Deputat
+- Header: Schulname | "MÜL — Müller, Hans" | Deputat Soll/Ist
 - Footer: Datum | Seite X/Y
-
-## export/diff_export.py
-- Vergleich alter/neuer Lösung
-- Änderungen markiert (rot/grün)
-- Qualitätsvergleich
 
 ## CLI
 ```
 python main.py export [--format excel|pdf|both]
-python main.py export --diff <old.json>
-python main.py run    # generate → solve → export
+               [--solution-path output/solution.json]
+               [--data-path output/school_data.json]
+               [--output-dir output/export]
+python main.py run [--seed N] [--no-soft] [--format excel|pdf|both]
+               # generate → solve → export
 ```
 
-## Tests
-- Export öffnen → Uhrzeiten und Pausen korrekt
-- Doppelstunden visuell verbunden
-- Kopplungen markiert
-- PDF lesbar
+## Tests (tests/test_export.py)
+- test_room_assignment_assigns_concrete_ids: Kein room_type-String im Entry
+- test_room_assignment_no_double_booking: Kein Raum doppelt belegt pro Slot
+- test_detect_double_starts: Korrekte (day, slot) Paare erkannt
+- test_count_gaps: Manuelle Beispiele (inkl. Mittagspause ≠ Springstunde)
+- test_coupling_label_reli: 'evangelisch'/'ethik', None für WPF
+- test_excel_creates_file: ExcelExporter erzeugt .xlsx
+- test_excel_has_correct_sheets: Sheets Übersicht + alle Klassen/Lehrer/Räume
+- test_pdf_creates_files: klassen_stundenplaene.pdf + lehrer_stundenplaene.pdf
 ```
 
 **→ Test nach Phase 4:**
 ```bash
-python main.py run
-# Excel + PDF manuell prüfen: Uhrzeiten, Pausen, Blöcke korrekt?
+python main.py solve --small --no-soft  # schnelle Lösung für Exporttest
+python main.py export
+# Excel + PDF manuell prüfen:
+# - Uhrzeiten und Pausen korrekt?
+# - Doppelstunden vertikal verbunden?
+# - "Religion (ev.)" bei Kopplungen?
+# - Raum-Sheets CH-1, CH-2 (nicht nur "chemie")?
+# - Springstunden rot im Lehrer-Sheet?
 ```
 
 ---

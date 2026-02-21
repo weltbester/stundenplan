@@ -37,9 +37,13 @@ def _make_mini_config() -> SchoolConfig:
         rooms=default_rooms(),
         teachers=TeacherConfig(
             total_count=10, vollzeit_deputat=26,
-            teilzeit_percentage=0.0, deputat_tolerance=3,
+            teilzeit_percentage=0.0, deputat_min_fraction=0.80,
         ),
-        solver=SolverConfig(time_limit_seconds=60, num_workers=4),
+        solver=SolverConfig(
+            time_limit_seconds=60,
+            num_workers=4,
+            weight_deputat_deviation=0,  # Deaktiviert für schnelle Tests
+        ),
     )
 
 
@@ -71,18 +75,19 @@ def _make_mini_school_data() -> SchoolData:
                     curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[7].items() if h > 0},
                     max_slot=sek1_max),
     ]
-    dep = 7
+    dep_max = 9  # 10×9h=90h >> 62h need → Solver-Spielraum
+    dep_min = 4  # T08/T09 (Kopplung-only) bekommen max 4h Kopplungsstunden → dep_min ≤ 4
     teachers = [
-        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
     ]
     couplings = [
         Coupling(id="reli_5", coupling_type="reli_ethik", involved_class_ids=["5a"],

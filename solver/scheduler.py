@@ -182,8 +182,15 @@ class ScheduleSolver:
         time_limit = self.config.solver.time_limit_seconds
         num_workers = self.config.solver.num_workers or os.cpu_count() or 4
 
-        if use_soft:
-            # Warm-Start: Schnell feasible Lösung ohne Soft finden, dann als Hint verwenden
+        # Deputat-Auslastung: immer als Core-Objective (auch bei --no-soft)
+        # dep_min = Sicherheitsboden; Solver optimiert immer in Richtung dep_max.
+        dep_weight = self.data.config.solver.weight_deputat_deviation
+        core_dep_terms = self._soft_deputat_deviation_penalties(dep_weight) if dep_weight > 0 else []
+
+        # Warm-Start: immer wenn ein Objective aktiv ist (Deputat oder Soft-Constraints)
+        # Zuerst ohne Objective eine feasible Lösung finden, dann als Hint für Optimierung nutzen.
+        needs_warmstart = bool(core_dep_terms) or use_soft
+        if needs_warmstart:
             pre_limit = min(90, time_limit // 3)
             pre_solver = cp_model.CpSolver()
             pre_solver.parameters.max_time_in_seconds = pre_limit
@@ -199,9 +206,12 @@ class ScheduleSolver:
                 for var in self._double.values():
                     self._model.add_hint(var, pre_solver.value(var))
             else:
-                logger.warning("Warm-Start: keine feasible Lösung gefunden – Soft-Solve ohne Hints")
+                logger.warning("Warm-Start: keine feasible Lösung gefunden – Solve ohne Hints")
 
-            self._add_soft_objective(weights)
+        if use_soft:
+            self._add_soft_objective(weights, extra_terms=core_dep_terms)
+        elif core_dep_terms:
+            self._model.minimize(sum(core_dep_terms))
 
         # Solver konfigurieren
         cp_solver = cp_model.CpSolver()
@@ -544,41 +554,29 @@ class ScheduleSolver:
                                 pass
 
     def _c7_deputat_bounds(self) -> None:
-        """Deputat ±Toleranz."""
-        tol = self.config.teachers.deputat_tolerance
-
+        """Per-Lehrer asymmetrische Deputat-Schranken (deputat_min ≤ actual ≤ deputat_max)."""
         for teacher in self.data.teachers:
             # Alle Slot-Variablen dieses Lehrers
             slot_vars = [
                 var for key, var in self._slot.items()
                 if key[0] == teacher.id
             ]
-            # Kopplungs-Stunden: coupling_assign * hours_per_week
-            # Vereinfachung: coupling_assign bedeutet 'hours_per_week' Stunden pro Woche
-            # Aber da coupling_slot pro Slot gezählt wird, zählen wir anders:
-            # Die Gesamtstunden eines Lehrers in Kopplungen = sum über alle Kopplungen
-            # wo er einer Gruppe zugewiesen ist: coupling.hours_per_week
-
-            # coupling_assigned[k, g, t] = 1 bedeutet: Lehrer unterrichtet die Gruppe
-            # mit group.hours_per_week Stunden
 
             coupling_terms = []
             for coupling in self.data.couplings:
                 for g_idx, group in enumerate(coupling.groups):
                     ca_key = (coupling.id, g_idx, teacher.id)
                     if ca_key in self._coupling_assign:
-                        # Skalierte Variable: hours × bool
                         h = group.hours_per_week
                         if h > 0:
                             coupling_terms.append(
                                 self._coupling_assign[ca_key] * h
                             )
 
-            total_hours = sum(slot_vars) + sum(coupling_terms) if (slot_vars or coupling_terms) else self._model.new_constant(0)
-
             if slot_vars or coupling_terms:
-                self._model.add(sum(slot_vars) + sum(coupling_terms) >= teacher.deputat - tol)
-                self._model.add(sum(slot_vars) + sum(coupling_terms) <= teacher.deputat + tol)
+                total = sum(slot_vars) + sum(coupling_terms)
+                self._model.add(total >= teacher.deputat_min)
+                self._model.add(total <= teacher.deputat_max)
 
     def _c8_special_room_capacity(self) -> None:
         """Fachraum-Kapazität: Nicht mehr Stunden als Räume vorhanden."""
@@ -987,7 +985,7 @@ class ScheduleSolver:
         total_slots = tg.sek1_max_slot * tg.days_per_week
 
         total_need = sum(sum(c.curriculum.values()) for c in self.data.classes)
-        total_dep = sum(t.deputat for t in self.data.teachers)
+        total_dep = sum(t.deputat_max for t in self.data.teachers)
         delta = total_dep - total_need
 
         num_vars = len(self._slot) + len(self._assign)
@@ -1022,7 +1020,7 @@ class ScheduleSolver:
         subject_cap: dict[str, int] = {}
         for teacher in self.data.teachers:
             for subj in teacher.subjects:
-                subject_cap[subj] = subject_cap.get(subj, 0) + teacher.deputat
+                subject_cap[subj] = subject_cap.get(subj, 0) + teacher.deputat_max
 
         for subj, need in sorted(subject_need.items()):
             if subj in coupling_covered:
@@ -1055,10 +1053,16 @@ class ScheduleSolver:
 
     # ─── Soft-Constraints / Zielfunktion ──────────────────────────────────────
 
-    def _add_soft_objective(self, weights: Optional[dict] = None) -> None:
+    def _add_soft_objective(
+        self,
+        weights: Optional[dict] = None,
+        extra_terms: list = [],
+    ) -> None:
         """Fügt weiche Zielfunktion (Minimierung) zum Modell hinzu.
 
-        Gewichte können über den weights-Parameter überschrieben werden.
+        extra_terms: bereits berechnete Terme (z.B. deputat_deviation), die
+        immer inkludiert werden sollen.
+        Gewichte für Komfort-Constraints können über weights überschrieben werden.
         """
         sc = self.config.solver
         w = {
@@ -1070,7 +1074,7 @@ class ScheduleSolver:
         if weights:
             w.update(weights)
 
-        terms = []
+        terms = list(extra_terms)
         if w["gaps"] > 0:
             terms.extend(self._soft_gap_penalties(w["gaps"]))
         if w["day_wishes"] > 0:
@@ -1206,4 +1210,26 @@ class ScheduleSolver:
                     )
                     terms.append(day_active * weight)
 
+        return terms
+
+    def _soft_deputat_deviation_penalties(self, weight: int) -> list:
+        """Straft Unterauslastung: dev = deputat_max − actual (≥ 0 durch _c7 garantiert)."""
+        terms = []
+        for teacher in self.data.teachers:
+            slot_vars = [v for k, v in self._slot.items() if k[0] == teacher.id]
+            coupling_terms = []
+            for coupling in self.data.couplings:
+                for g_idx, group in enumerate(coupling.groups):
+                    ca_key = (coupling.id, g_idx, teacher.id)
+                    if ca_key in self._coupling_assign:
+                        h = group.hours_per_week
+                        if h > 0:
+                            coupling_terms.append(self._coupling_assign[ca_key] * h)
+            if not (slot_vars or coupling_terms):
+                continue
+            dev = self._model.new_int_var(0, teacher.deputat_max, f"dep_dev_{teacher.id}")
+            self._model.add(
+                dev == teacher.deputat_max - (sum(slot_vars) + sum(coupling_terms))
+            )
+            terms.append(dev * weight)
         return terms

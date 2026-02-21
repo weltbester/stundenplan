@@ -164,9 +164,17 @@ class TeacherConfig(BaseModel):
     # Globaler Default: max. Springstunden pro Woche
     max_gaps_per_week: int = Field(3, ge=0, le=10,
         description="Max Springstunden pro Woche (globaler Default)")
-    # Erlaubte Abweichung vom Soll-Deputat (±Stunden)
-    deputat_tolerance: int = Field(4, ge=0, le=6,
-        description="Erlaubte Abweichung vom Soll-Deputat (±)")
+    # Mindestauslastung relativ zu deputat_max (0.5–1.0)
+    deputat_min_fraction: float = Field(
+        0.80, ge=0.5, le=1.0,
+        description="Mindestauslastung relativ zu deputat_max (0.5–1.0)"
+    )
+    # Mehrarbeit-Puffer über dem Vertrags-Deputat (0–6h, typisch 1–3h)
+    # Gibt dem Solver Spielraum; z.B. 2 → VZ-Lehrer kann bis zu 28h statt 26h zugewiesen bekommen.
+    deputat_max_buffer: int = Field(
+        2, ge=0, le=6,
+        description="Mehrarbeit-Puffer über Deputat für Solver-Flexibilität (0–6h)"
+    )
 
 
 # ─── FACHRÄUME ───
@@ -265,6 +273,10 @@ class SolverConfig(BaseModel):
     # Gewicht für Verteilung von Hauptfächern über die Woche
     weight_subject_spread: int = Field(60, ge=0,
         description="Gewicht: Hauptfächer über Woche verteilen")
+    # Gewicht für Deputat-Auslastung (immer aktiv, auch bei --no-soft)
+    # Minimiert sum(dep_max - actual): Solver strebt dep_max an; dep_min ist nur Sicherheitsboden.
+    weight_deputat_deviation: int = Field(50, ge=0,
+        description="Gewicht: Deputat-Auslastung maximieren (immer aktiv)")
 
 
 # ─── GESAMT-CONFIG ───

@@ -234,7 +234,7 @@ class PdfExporter:
             actual = count_teacher_actual_hours(self.solution.entries, teacher.id)
             entity = (
                 f"{teacher.id} - {teacher.name} "
-                f"| Soll: {teacher.deputat}h | Ist: {actual}h"
+                f"| Min: {teacher.deputat_min}h-Max: {teacher.deputat_max}h | Ist: {actual}h"
             )
             pdf.set_entity(entity)
             max_slot = max(
@@ -323,9 +323,8 @@ class PdfExporter:
         """Zeichnet Statistik-Box unter dem Lehrerplan."""
         gaps = count_gaps(entries)
         text = (
-            f"Deputat Soll: {teacher.deputat}h  |  "
-            f"Ist: {actual}h  |  "
-            f"Springstunden: {gaps}"
+            f"Deputat Min: {teacher.deputat_min}h | Max: {teacher.deputat_max}h  |  "
+            f"Ist: {actual}h  |  Springstunden: {gaps}"
         )
         p = pdf._pdf
         p.set_auto_page_break(False)

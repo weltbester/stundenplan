@@ -249,15 +249,17 @@ class TestModels:
         """Teacher ist ein Pydantic-Modell; id wird normalisiert."""
         from models.teacher import Teacher
         t = Teacher(id="mül", name="Müller, Hans", subjects=["Mathematik", "Physik"],
-                    deputat=26)
+                    deputat_max=26, deputat_min=21)
         assert t.id == "MÜL"  # normalisiert zu Großbuchstaben
-        assert t.deputat == 26
+        assert t.deputat == 26  # Property gibt deputat_max zurück
+        assert t.deputat_max == 26
+        assert t.deputat_min == 21
         assert not t.is_teilzeit
 
     def test_teacher_unavailable_slots(self):
         """Teacher.unavailable_slots akzeptiert tuple[int,int]."""
         from models.teacher import Teacher
-        t = Teacher(id="TST", name="Test, A", subjects=["Deutsch"], deputat=20,
+        t = Teacher(id="TST", name="Test, A", subjects=["Deutsch"], deputat_max=20, deputat_min=16,
                     unavailable_slots=[(0, 1), (0, 2), (4, 7)])
         assert len(t.unavailable_slots) == 3
 
@@ -462,10 +464,15 @@ class TestSchoolData:
         assert isinstance(report.warnings, list)
 
     def test_chemie_engpass_triggers_warning(self):
-        """Chemie-Engpass erzeugt Warnung im Feasibility-Report."""
-        data = self._make_data()
+        """Chemie-Engpass erzeugt Warnung wenn kein Mehrarbeit-Puffer gesetzt ist."""
+        from data.fake_data import FakeDataGenerator
+        config = default_school_config()
+        # Ohne Puffer: Chemie-Kapazität 52h vs. 48h Bedarf = 108% → Warnung bei < 110%
+        config = config.model_copy(update={
+            "teachers": config.teachers.model_copy(update={"deputat_max_buffer": 0})
+        })
+        data = FakeDataGenerator(config, seed=42).generate()
         report = data.validate_feasibility()
-        # Warnung wegen Chemie-Auslastung > 85%
         chemie_warnings = [w for w in report.warnings if "Chemie" in w or "chemie" in w.lower()]
         assert len(chemie_warnings) >= 1, (
             f"Keine Chemie-Warnung im Report. Warnungen: {report.warnings}"

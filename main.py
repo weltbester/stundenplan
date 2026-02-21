@@ -173,7 +173,7 @@ def cmd_generate(seed: int, export_json: bool, json_path: str, run_validate: boo
         f.write(data.summary() + "\n\n")
         f.write("=== Lehrkräfte ===\n")
         for t in data.teachers:
-            f.write(f"  {t.id:4s} {t.name:35s} {t.deputat}h  {t.subjects}\n")
+            f.write(f"  {t.id:4s} {t.name:35s} {t.deputat_min}-{t.deputat_max}h  {t.subjects}\n")
         f.write("\n=== Klassen ===\n")
         for c in data.classes:
             f.write(f"  {c.id:4s}  {sum(c.curriculum.values())}h/Woche\n")
@@ -304,7 +304,7 @@ def _build_mini_school_data():
             total_count=10,
             vollzeit_deputat=26,
             teilzeit_percentage=0.0,
-            deputat_tolerance=3,
+            deputat_min_fraction=0.80,
         ),
         solver=SolverConfig(time_limit_seconds=60, num_workers=4),
     )
@@ -331,18 +331,19 @@ def _build_mini_school_data():
                     curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[7].items() if h > 0},
                     max_slot=sek1_max),
     ]
-    dep = 7  # 10 × 7h = 70h ≥ Gesamtbedarf (62h inkl. Kopplung)
+    dep_max = 9  # 10 × 9h = 90h >> Gesamtbedarf (62h inkl. Kopplung) → Solver-Spielraum
+    dep_min = 4  # T08/T09 (Kopplung-only) bekommen max 4h Kopplungsstunden → dep_min ≤ 4
     teachers = [
-        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat=dep, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
     ]
     couplings = [
         Coupling(id="reli_5", coupling_type="reli_ethik", involved_class_ids=["5a"],
@@ -530,7 +531,7 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
     # ── Zusammenfassung: Lehrer-Auslastung ───────────────────────────────────
     table = Table(title="Lehrer-Auslastung (Top 10)", box=box.ROUNDED)
     table.add_column("Kürzel")
-    table.add_column("Soll", justify="right")
+    table.add_column("Min-Max", justify="right")
     table.add_column("Ist", justify="right")
     table.add_column("Δ", justify="right")
 
@@ -559,13 +560,18 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
     for t_id, actual in teacher_hours.items():
         teacher = teacher_map.get(t_id)
         if teacher:
-            delta = actual - teacher.deputat
-            rows.append((t_id, teacher.deputat, actual, delta))
+            delta = actual - teacher.deputat_max
+            rows.append((t_id, f"{teacher.deputat_min}-{teacher.deputat_max}", actual, delta, teacher))
 
     rows.sort(key=lambda r: abs(r[3]), reverse=True)
-    for t_id, soll, ist, delta in rows[:10]:
-        color = "green" if abs(delta) <= 1 else "yellow" if abs(delta) <= 2 else "red"
-        table.add_row(t_id, str(soll), str(ist), f"[{color}]{delta:+d}[/{color}]")
+    for t_id, minmax, ist, delta, teacher in rows[:10]:
+        if teacher.deputat_min <= ist <= teacher.deputat_max:
+            color = "green"
+        elif ist < teacher.deputat_min:
+            color = "red"
+        else:
+            color = "yellow"
+        table.add_row(t_id, minmax, f"[{color}]{ist}[/{color}]", f"[{color}]{delta:+d}[/{color}]")
 
     if rows:
         console.print(table)

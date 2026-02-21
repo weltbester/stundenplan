@@ -89,11 +89,11 @@ class ConstraintRelaxer:
             time_limit=time_limit,
         ))
 
-        # 4. Doppelte Deputat-Toleranz
+        # 4. Erweiterte Deputat-Grenzen
         results.append(self._test_relaxation(
-            name="double_tolerance",
-            description="Deputat-Toleranz verdoppelt",
-            data=self._relax_double_tolerance(),
+            name="wider_deputat_bounds",
+            description="deputat_min auf 50% von deputat_max gesenkt",
+            data=self._relax_wider_deputat_bounds(),
             pins=pins,
             time_limit=time_limit,
         ))
@@ -173,20 +173,22 @@ class ConstraintRelaxer:
             config=self.data.config,
         )
 
-    def _relax_double_tolerance(self) -> SchoolData:
-        """Erstellt Datensatz mit doppelter Deputat-Toleranz."""
-        new_config = self.data.config.model_copy(deep=True)
-        old_tol = new_config.teachers.deputat_tolerance
-        # Schema-Maximum ist 6; verdoppeln bis max 6
-        new_tol = min(old_tol * 2, 6)
-        new_config.teachers.deputat_tolerance = new_tol
+    def _relax_wider_deputat_bounds(self) -> SchoolData:
+        """Senkt deputat_min auf 25% von deputat_max für maximale Solver-Flexibilität.
+
+        25% statt 50%: wirkt auch wenn deputat_min_fraction bereits 0.5 ist (kein No-Op).
+        """
+        new_teachers = [
+            t.model_copy(update={"deputat_min": max(1, round(t.deputat_max * 0.25))})
+            for t in self.data.teachers
+        ]
         return SchoolData(
             subjects=self.data.subjects,
             rooms=self.data.rooms,
             classes=self.data.classes,
-            teachers=self.data.teachers,
+            teachers=new_teachers,
             couplings=self.data.couplings,
-            config=new_config,
+            config=self.data.config,
         )
 
     def _relax_all_combined(self) -> SchoolData:
@@ -207,16 +209,17 @@ class ConstraintRelaxer:
             ]
         )
 
-        # Deputat-Toleranz verdoppeln
-        new_config.teachers.deputat_tolerance = min(
-            new_config.teachers.deputat_tolerance * 2, 6
-        )
+        # deputat_min auf 25% senken (konsistent mit _relax_wider_deputat_bounds)
+        new_teachers = [
+            t.model_copy(update={"deputat_min": max(1, round(t.deputat_max * 0.25))})
+            for t in self.data.teachers
+        ]
 
         return SchoolData(
             subjects=self.data.subjects,
             rooms=self.data.rooms,
             classes=self.data.classes,
-            teachers=self.data.teachers,
+            teachers=new_teachers,
             couplings=[],  # Kopplungen entfernen
             config=new_config,
         )
@@ -375,10 +378,10 @@ class ConstraintRelaxer:
                 "Kopplungen: Die Kopplungs-Constraints verursachen Konflikte. "
                 "Prüfen Sie Überschneidungen zwischen Kopplungs- und regulären Stunden."
             )
-        if by_name.get("double_tolerance") in ("OPTIMAL", "FEASIBLE"):
+        if by_name.get("wider_deputat_bounds") in ("OPTIMAL", "FEASIBLE"):
             fixes.append(
-                "Deputat-Toleranz: Die Deputat-Grenzen sind zu eng. "
-                "Erhöhen Sie deputat_tolerance in der Konfiguration."
+                "Deputat-Grenzen: Die Deputat-Untergrenzen sind zu eng. "
+                "Senken Sie deputat_min_fraction in der Konfiguration."
             )
 
         if fixes:

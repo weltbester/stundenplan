@@ -62,7 +62,7 @@ class SchoolData(BaseModel):
     def summary(self) -> str:
         """Kurze Übersicht über den Datensatz."""
         total_need = sum(sum(c.curriculum.values()) for c in self.classes)
-        total_dep = sum(t.deputat for t in self.teachers)
+        total_dep = sum(t.deputat_max for t in self.teachers)
         num_teilzeit = sum(1 for t in self.teachers if t.is_teilzeit)
         lines = [
             f"Schule: {self.config.school_name}",
@@ -106,48 +106,46 @@ class SchoolData(BaseModel):
         subject_map = {s.name: s for s in self.subjects}
 
         # ── 5. Gesamtbilanz ──────────────────────────────────────────────
-        total_deputat = sum(t.deputat for t in self.teachers)
+        total_deputat_max = sum(t.deputat_max for t in self.teachers)
+        total_deputat_min = sum(t.deputat_min for t in self.teachers)
         total_need = sum(sum(c.curriculum.values()) for c in self.classes)
 
-        tol = self.config.teachers.deputat_tolerance
         if total_need == 0:
             warnings.append("Kein Curriculum definiert – Machbarkeit kann nicht geprüft werden.")
-        elif total_deputat < total_need:
+        elif total_deputat_max < total_need:
             errors.append(
-                f"Gesamtbilanz: Lehrerkapazität ({total_deputat}h) < Gesamtbedarf ({total_need}h). "
-                f"Fehlen mindestens {total_need - total_deputat}h. Mehr Lehrkräfte benötigt."
+                f"Gesamtbilanz: Lehrerkapazität ({total_deputat_max}h) < Gesamtbedarf ({total_need}h). "
+                f"Fehlen mindestens {total_need - total_deputat_max}h. Mehr Lehrkräfte benötigt."
             )
-        elif total_deputat < total_need * 1.05:
-            puffer = (total_deputat / total_need - 1) * 100
+        elif total_deputat_max < total_need * 1.05:
+            puffer = (total_deputat_max / total_need - 1) * 100
             warnings.append(
-                f"Gesamtbilanz sehr knapp: {total_deputat}h Kapazität bei {total_need}h Bedarf "
+                f"Gesamtbilanz sehr knapp: {total_deputat_max}h Kapazität bei {total_need}h Bedarf "
                 f"(nur {puffer:.1f}% Puffer – Stundenplan schwer zu erstellen)."
             )
 
-        # Deputat-Untergrenze: Summe aller Mindest-Deputate ≤ Gesamtbedarf
+        # Deputat-Untergrenze: Summe aller deputat_min ≤ Gesamtbedarf
         # Sonst können nicht alle Lehrer ihre Mindest-Stunden erreichen → INFEASIBLE
-        total_min_deputat = sum(max(0, t.deputat - tol) for t in self.teachers)
-        if total_min_deputat > total_need:
+        if total_deputat_min > total_need:
             errors.append(
-                f"Deputat-Untergrenze verletzt: Summe aller Mindest-Deputate "
-                f"({total_min_deputat}h) > Gesamtbedarf ({total_need}h). "
-                f"Erhöhen Sie deputat_tolerance (aktuell {tol}h) auf mind. "
-                f"{(total_min_deputat - total_need + len(self.teachers) - 1) // len(self.teachers) + tol}h "
-                f"oder reduzieren Sie die Lehrkräfte-Anzahl."
+                f"Deputat-Untergrenze verletzt: Summe deputat_min ({total_deputat_min}h) "
+                f"> Gesamtbedarf ({total_need}h). "
+                f"deputat_min_fraction senken oder Lehrerzahl reduzieren."
             )
 
-        # ── 3. Jeder Lehrer: verfügbare Slots ≥ Deputat ─────────────────
+        # ── 3. Jeder Lehrer: verfügbare Slots ≥ deputat_min ─────────────────
+        # dep_max ist Obergrenze; Fehler nur wenn Minimum nicht erreichbar ist.
         for teacher in self.teachers:
             available = total_slots_per_week - len(teacher.unavailable_slots)
-            if available < teacher.deputat:
+            if available < teacher.deputat_min:
                 errors.append(
                     f"Lehrkraft {teacher.id} ({teacher.name}): Nur {available} verfügbare Slots "
-                    f"bei Deputat {teacher.deputat}h. Sperrzeiten reduzieren oder Deputat anpassen."
+                    f"bei Deputat-Min {teacher.deputat_min}h. Sperrzeiten reduzieren oder Deputat anpassen."
                 )
-            elif available - teacher.deputat < 2:
+            elif available < teacher.deputat_max:
                 warnings.append(
-                    f"Lehrkraft {teacher.id}: Sehr wenig Spielraum – "
-                    f"{available} Slots bei {teacher.deputat}h Deputat."
+                    f"Lehrkraft {teacher.id}: Deputat-Max ({teacher.deputat_max}h) > verfügbare Slots "
+                    f"({available}) – Solver weist max. {available}h zu."
                 )
 
         # Freitag-Cluster-Warnung
@@ -186,7 +184,7 @@ class SchoolData(BaseModel):
         subject_capacity: dict[str, int] = {}
         for teacher in self.teachers:
             for subj in teacher.subjects:
-                subject_capacity[subj] = subject_capacity.get(subj, 0) + teacher.deputat
+                subject_capacity[subj] = subject_capacity.get(subj, 0) + teacher.deputat_max
 
         for subj_name, need in subject_need.items():
             if subj_name in coupling_covered:

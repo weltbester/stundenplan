@@ -463,11 +463,14 @@ class ExcelImporter:
             except ValueError:
                 max_g = tc.max_gaps_per_day
 
+            deputat_max = deputat + tc.deputat_max_buffer
+            deputat_min = max(1, round(deputat_max * tc.deputat_min_fraction))
             teachers.append(Teacher(
                 id=abbr,
                 name=name,
                 subjects=subjects,
-                deputat=deputat,
+                deputat_max=deputat_max,
+                deputat_min=deputat_min,
                 is_teilzeit=is_teilzeit,
                 unavailable_slots=unavailable,
                 preferred_free_days=free_days,

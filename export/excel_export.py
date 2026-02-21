@@ -247,7 +247,7 @@ class ExcelExporter:
         row += 2
 
         # Lehrer-Tabelle
-        headers = ["Kürzel", "Name", "Fächer", "Soll", "Ist", "Springstd."]
+        headers = ["Kürzel", "Name", "Fächer", "Min", "Max", "Ist", "Springstd."]
         fill_h = self._fill(COLORS["header"])
         border = self._thin_border()
         for col, h in enumerate(headers, 1):
@@ -261,17 +261,17 @@ class ExcelExporter:
             actual = count_teacher_actual_hours(self.solution.entries, teacher.id)
             t_entries = self.solution.get_teacher_schedule(teacher.id)
             gaps = count_gaps(t_entries)
-            delta = actual - teacher.deputat
 
             ws.cell(row=row, column=1, value=teacher.id).border = border
             ws.cell(row=row, column=2, value=teacher.name).border = border
             ws.cell(row=row, column=3, value=", ".join(teacher.subjects)).border = border
-            ws.cell(row=row, column=4, value=teacher.deputat).border = border
-            c_ist = ws.cell(row=row, column=5, value=actual)
+            ws.cell(row=row, column=4, value=teacher.deputat_min).border = border
+            ws.cell(row=row, column=5, value=teacher.deputat_max).border = border
+            c_ist = ws.cell(row=row, column=6, value=actual)
             c_ist.border = border
-            if abs(delta) > 2:
+            if actual < teacher.deputat_min or actual > teacher.deputat_max:
                 c_ist.fill = self._fill("FFCCCC")
-            ws.cell(row=row, column=6, value=gaps).border = border
+            ws.cell(row=row, column=7, value=gaps).border = border
             row += 1
 
         row += 1
@@ -310,7 +310,8 @@ class ExcelExporter:
         ws.column_dimensions["C"].width = 40
         ws.column_dimensions["D"].width = 8
         ws.column_dimensions["E"].width = 8
-        ws.column_dimensions["F"].width = 12
+        ws.column_dimensions["F"].width = 8
+        ws.column_dimensions["G"].width = 12
 
     # ─── Sheet: Klasse ────────────────────────────────────────────────────────
 
@@ -341,8 +342,8 @@ class ExcelExporter:
         actual = count_teacher_actual_hours(self.solution.entries, teacher.id)
         gaps = count_gaps(entries)
         last_row += 1
-        ws.cell(row=last_row, column=1, value="Deputat Soll:").font = Font(bold=True)
-        ws.cell(row=last_row, column=2, value=f"{teacher.deputat}h")
+        ws.cell(row=last_row, column=1, value="Deputat:").font = Font(bold=True)
+        ws.cell(row=last_row, column=2, value=f"Min: {teacher.deputat_min}h | Max: {teacher.deputat_max}h")
         ws.cell(row=last_row, column=3, value="Ist:").font = Font(bold=True)
         ws.cell(row=last_row, column=4, value=f"{actual}h")
         ws.cell(row=last_row, column=5, value="Springstunden:").font = Font(bold=True)

@@ -165,14 +165,15 @@ class TeacherConfig(BaseModel):
     max_gaps_per_week: int = Field(3, ge=0, le=10,
         description="Max Springstunden pro Woche (globaler Default)")
     # Mindestauslastung relativ zu deputat_max (0.5–1.0)
+    # 0.50 = Sicherheitsboden; in Produktionskonfigurationen eher 0.75–0.90.
     deputat_min_fraction: float = Field(
-        0.80, ge=0.5, le=1.0,
+        0.50, ge=0.5, le=1.0,
         description="Mindestauslastung relativ zu deputat_max (0.5–1.0)"
     )
     # Mehrarbeit-Puffer über dem Vertrags-Deputat (0–6h, typisch 1–3h)
-    # Gibt dem Solver Spielraum; z.B. 2 → VZ-Lehrer kann bis zu 28h statt 26h zugewiesen bekommen.
+    # Gibt dem Solver Spielraum; z.B. 6 → VZ-Lehrer kann bis zu 32h statt 26h zugewiesen bekommen.
     deputat_max_buffer: int = Field(
-        2, ge=0, le=6,
+        6, ge=0, le=6,
         description="Mehrarbeit-Puffer über Deputat für Solver-Flexibilität (0–6h)"
     )
 

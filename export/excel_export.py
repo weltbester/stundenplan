@@ -288,10 +288,16 @@ class ExcelExporter:
         row += 1
 
         max_slots = self.tg.sek1_max_slot * self.tg.days_per_week
+        # De-duplizieren nach (room, day, slot) – Kopplungsstunden zählen einmal,
+        # auch wenn sie für mehrere Klassen als Eintrag erscheinen.
+        seen_room_slots: set[tuple] = set()
         room_usage: dict[str, int] = defaultdict(int)
         for e in self.solution.entries:
             if e.room and not e.room.endswith("-?"):
-                room_usage[e.room] += 1
+                key = (e.room, e.day, e.slot_number)
+                if key not in seen_room_slots:
+                    seen_room_slots.add(key)
+                    room_usage[e.room] += 1
 
         for room in sorted(self.data.rooms, key=lambda r: r.id):
             occupied = room_usage.get(room.id, 0)

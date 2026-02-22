@@ -208,6 +208,10 @@ class ScheduleSolver:
                     self._model.add_hint(var, pre_solver.value(var))
                 for var in self._double.values():
                     self._model.add_hint(var, pre_solver.value(var))
+                for var in self._coupling_slot.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._coupling_assign.values():
+                    self._model.add_hint(var, pre_solver.value(var))
             else:
                 logger.warning("Warm-Start: keine feasible Lösung gefunden – Solve ohne Hints")
 

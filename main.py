@@ -31,10 +31,154 @@ from pathlib import Path
 
 try:
     import rich_click as click
-    click.rich_click.TEXT_MARKUP = "markdown"
-    click.rich_click.SHOW_ARGUMENTS = True
-    click.rich_click.STYLE_COMMANDS_PANEL_BORDER = "bold blue"
-    click.rich_click.STYLE_OPTIONS_PANEL_BORDER = "dim blue"
+
+    rc = click.rich_click
+
+    # ── Grundeinstellungen ────────────────────────────────────────────────────
+    rc.USE_RICH_MARKUP       = True
+    rc.USE_MARKDOWN          = False
+    rc.SHOW_ARGUMENTS        = True
+    rc.SHOW_METAVARS_COLUMN  = True
+    rc.MAX_WIDTH             = 100
+    rc.COLOR_SYSTEM          = "truecolor"
+
+    # ── Header / Footer ───────────────────────────────────────────────────────
+    rc.HEADER_TEXT = (
+        "\n[bold cyan]╔══════════════════════════════════════════════╗[/bold cyan]\n"
+        "[bold cyan]║[/bold cyan]  [bold white]Stundenplan-Generator[/bold white]"
+        "  [dim]Gymnasium Sek I — v1.1[/dim]  "
+        "[bold cyan]║[/bold cyan]\n"
+        "[bold cyan]╚══════════════════════════════════════════════╝[/bold cyan]\n"
+    )
+    rc.FOOTER_TEXT = (
+        "\n[dim]Erster Start? Führen Sie [bold]python main.py setup[/bold] aus.[/dim]\n"
+        "[dim]Logs:          [italic]output/stundenplan.log[/italic][/dim]\n"
+    )
+
+    # ── Befehle in logische Gruppen aufteilen ─────────────────────────────────
+    rc.COMMAND_GROUPS = {
+        "main.py": [
+            {
+                "name": "Einrichtung",
+                "commands": ["setup", "config"],
+            },
+            {
+                "name": "Datenverwaltung",
+                "commands": ["generate", "template", "import", "validate"],
+            },
+            {
+                "name": "Solver",
+                "commands": ["solve", "pin"],
+            },
+            {
+                "name": "Export & Anzeige",
+                "commands": ["export", "show", "run"],
+            },
+            {
+                "name": "Analyse",
+                "commands": ["quality", "substitute"],
+            },
+            {
+                "name": "Szenarien",
+                "commands": ["scenario"],
+            },
+        ]
+    }
+
+    # ── Optionen für 'solve' in Gruppen aufteilen ─────────────────────────────
+    rc.OPTION_GROUPS = {
+        "main.py solve": [
+            {
+                "name": "Datenpfade",
+                "options": ["--json-path", "--output", "--pins-path"],
+            },
+            {
+                "name": "Solver-Verhalten",
+                "options": [
+                    "--time-limit", "--no-soft", "--weights",
+                    "--diagnose", "--verbose",
+                ],
+            },
+            {
+                "name": "Schnelltest",
+                "options": ["--small"],
+            },
+        ],
+        "main.py export": [
+            {
+                "name": "Format & Ausgabe",
+                "options": ["--format", "--output-dir"],
+            },
+            {
+                "name": "Datenpfade",
+                "options": ["--solution-path", "--data-path"],
+            },
+        ],
+        "main.py substitute": [
+            {
+                "name": "Abwesenheit",
+                "options": ["--teacher", "--day", "--slot", "--top"],
+            },
+            {
+                "name": "Datenpfade",
+                "options": ["--json-path", "--solution-path"],
+            },
+        ],
+        "main.py show": [
+            {
+                "name": "Datenpfade",
+                "options": ["--json-path", "--solution-path"],
+            },
+        ],
+    }
+
+    # ── Farben & Panel-Stile ──────────────────────────────────────────────────
+    # Befehls-Panel
+    rc.STYLE_COMMANDS_PANEL_BORDER    = "bold cyan"
+    rc.STYLE_COMMANDS_PANEL_BOX       = "ROUNDED"
+    rc.STYLE_COMMANDS_PANEL_TITLE_STYLE = "bold white on dark_blue"
+    rc.STYLE_COMMANDS_PANEL_PADDING   = (0, 1)
+
+    # Options-Panel
+    rc.STYLE_OPTIONS_PANEL_BORDER     = "bold blue"
+    rc.STYLE_OPTIONS_PANEL_BOX        = "ROUNDED"
+    rc.STYLE_OPTIONS_PANEL_TITLE_STYLE = "bold white on dark_blue"
+    rc.STYLE_OPTIONS_PANEL_PADDING    = (0, 1)
+
+    # Tabellen-Zebra-Streifen (nur Befehls-Tabelle, nicht Optionen)
+    rc.STYLE_COMMANDS_TABLE_ROW_STYLES = ["", "dim"]
+    rc.STYLE_OPTIONS_TABLE_ROW_STYLES  = []
+    rc.STYLE_COMMANDS_TABLE_PADDING    = (0, 2)
+    rc.STYLE_OPTIONS_TABLE_PADDING     = (0, 2)
+    rc.STYLE_COMMANDS_TABLE_LEADING    = 1
+
+    # Text-Stile
+    rc.STYLE_HELPTEXT_FIRST_LINE = "bold"
+    rc.STYLE_HELPTEXT             = ""
+    rc.STYLE_OPTION               = "bold yellow"
+    rc.STYLE_SWITCH               = "bold green"
+    rc.STYLE_ARGUMENT             = "bold magenta"
+    rc.STYLE_COMMAND              = "bold cyan"
+    rc.STYLE_METAVAR              = "italic dim"
+    rc.STYLE_METAVAR_SEPARATOR    = "dim"
+    rc.STYLE_USAGE                = "bold white"
+    rc.STYLE_USAGE_COMMAND        = "bold cyan"
+    rc.STYLE_HEADER_TEXT          = ""
+    rc.STYLE_FOOTER_TEXT          = ""
+
+    # Fehler-Panel
+    rc.STYLE_ERRORS_PANEL_BORDER  = "bold red"
+    rc.STYLE_ERRORS_PANEL_BOX     = "ROUNDED"
+    rc.ERRORS_PANEL_TITLE         = "Fehler"
+
+    # Panel-Titel-Labels
+    rc.OPTIONS_PANEL_TITLE        = "Optionen"
+    rc.COMMANDS_PANEL_TITLE       = "Befehle"
+    rc.ARGUMENTS_PANEL_TITLE      = "Argumente"
+
+    # Hilfetext-Einrückung
+    rc.PADDING_HELPTEXT           = (0, 1, 0, 1)
+
 except ImportError:
     import click
 
@@ -188,7 +332,11 @@ def config_edit():
 @click.option("--validate", "run_validate", is_flag=True, default=True,
               help="Machbarkeits-Check nach Generierung.")
 def cmd_generate(seed: int, export_json: bool, json_path: str, run_validate: bool):
-    """Erzeugt Testdaten (Lehrkräfte, Klassen, Räume, Kopplungen)."""
+    """[bold]Erzeugt realistische Testdaten[/bold] (Lehrkräfte, Klassen, Räume, Kopplungen).
+
+    Enthält absichtliche Engpässe (Chemie-Mangel, Freitag-Cluster,
+    Fachraum-Limits) für einen realistischen Solver-Test.
+    """
     mgr, config = _load_config_or_abort()
     from data.fake_data import FakeDataGenerator
 
@@ -472,7 +620,13 @@ def _parse_weights(s: str) -> dict:
               help="Gewichte überschreiben, z.B. 'gaps=200,double_lessons=50'.")
 def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose,
               no_soft, weights):
-    """Berechnet den Stundenplan mit CP-SAT Solver."""
+    """[bold]Berechnet den Stundenplan[/bold] mit Google OR-Tools CP-SAT.
+
+    Standardmäßig werden harte Constraints gelöst und anschließend
+    [cyan]Soft-Constraints optimiert[/cyan] (Springstunden, Deputat,
+    Doppelstunden, Fächerverteilung). Mit [yellow]--no-soft[/yellow] nur
+    harte Constraints — deutlich schneller.
+    """
     from models.school_data import SchoolData
     from solver.scheduler import ScheduleSolver
     from solver.pinning import PinManager
@@ -770,7 +924,12 @@ DEFAULT_EXPORT_DIR = Path("output/export")
 @click.option("--output-dir", default=str(DEFAULT_EXPORT_DIR),
               help="Ausgabeverzeichnis für Export-Dateien.")
 def cmd_export(fmt: str, solution_path: str, data_path: str, output_dir: str):
-    """Exportiert den Stundenplan als Excel und/oder PDF."""
+    """[bold]Exportiert den Stundenplan[/bold] als Excel-Arbeitsmappe und/oder PDF.
+
+    Die Ausgabe enthält je ein Blatt pro [cyan]Klasse[/cyan],
+    [cyan]Lehrer[/cyan] und [cyan]Fachraum[/cyan] sowie eine
+    Übersichtsseite mit Deputat-Statistiken.
+    """
     from models.school_data import SchoolData
     from solver.scheduler import ScheduleSolution
     from export import ExcelExporter, PdfExporter
@@ -833,7 +992,11 @@ def cmd_export(fmt: str, solution_path: str, data_path: str, output_dir: str):
 @click.option("--output-dir", default=str(DEFAULT_EXPORT_DIR),
               help="Ausgabeverzeichnis für Export-Dateien.")
 def cmd_run(seed: int, no_soft: bool, fmt: str, output_dir: str):
-    """Führt die komplette Pipeline aus: generate → solve → export."""
+    """[bold]Komplette Pipeline:[/bold] [cyan]generate → solve → export[/cyan].
+
+    Erzeugt Testdaten, berechnet den Stundenplan und exportiert das
+    Ergebnis in einem einzigen Schritt.
+    """
     import subprocess
 
     console.print(Panel(
@@ -1137,10 +1300,12 @@ def _subject_style(subject_name: str, subjects) -> str:
 @click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
               show_default=True, help="Pfad zur Lösungs-JSON.")
 def cmd_show(kennung: str, json_path: str, solution_path: str):
-    """Zeigt einen Stundenplan im Terminal an.
+    """[bold]Zeigt einen Stundenplan im Terminal an.[/bold]
 
-    KENNUNG ist entweder eine Klassen-ID (z.B. 5a, 10c) oder ein
-    Lehrer-Kürzel (z.B. MÜL, SCH).
+    [bold magenta]KENNUNG[/bold magenta] ist entweder eine
+    [cyan]Klassen-ID[/cyan] (z.B. [bold]5a[/bold], [bold]10c[/bold])
+    oder ein [cyan]Lehrer-Kürzel[/cyan] (z.B. [bold]MÜL[/bold]).
+    Springstunden werden [red]rot[/red] hinterlegt.
     """
     from models.school_data import SchoolData
     from solver.scheduler import ScheduleSolution
@@ -1369,9 +1534,11 @@ def _show_teacher_schedule(
 
 @click.group()
 def cli():
-    """Stundenplan-Generator für Gymnasien (Sek I).
+    """[bold]Automatischer Stundenplan-Generator[/bold] für Gymnasien (Sekundarstufe I).
 
-    Starten Sie mit: python main.py setup
+    Löst die Stundenzuweisung als [cyan]Constraint-Satisfaction-Problem[/cyan]
+    mit [cyan]Google OR-Tools CP-SAT[/cyan]. Unterstützt Kopplungen,
+    Doppelstunden, Fachräume und Deputat-Grenzen.
     """
 
 

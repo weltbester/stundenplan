@@ -39,7 +39,8 @@ class ScheduleEntry(BaseModel):
     teacher_id: str
     class_id: str
     subject: str
-    room: Optional[str] = None
+    room: Optional[str] = None       # Sonderraum-ID (z.B. "PH1"), None = Klassenraum
+    home_room: Optional[str] = None  # Klassenraum-ID (aus SchoolClass.home_room)
     is_coupling: bool = False
     coupling_id: Optional[str] = None
 
@@ -974,6 +975,20 @@ class ScheduleSolver:
             pass
 
         entries = self._assign_rooms(entries)
+
+        # Home-Room: Klassenraum-ID für alle Entries aus SchoolClass.home_room übernehmen
+        class_home_rooms = {
+            cls.id: cls.home_room
+            for cls in self.data.classes
+            if cls.home_room
+        }
+        if class_home_rooms:
+            entries = [
+                entry.model_copy(update={"home_room": class_home_rooms[entry.class_id]})
+                if entry.class_id in class_home_rooms
+                else entry
+                for entry in entries
+            ]
 
         return ScheduleSolution(
             entries=entries,

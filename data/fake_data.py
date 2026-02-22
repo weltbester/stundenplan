@@ -155,13 +155,17 @@ class FakeDataGenerator:
             raw_curriculum = STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {})
             curriculum = {f: h for f, h in raw_curriculum.items() if h > 0}
 
-            for label in labels[:grade_def.num_classes]:
+            # Etage: Klassen-5→Etage 1, Klasse 6→Etage 2, usw.
+            floor = grade - 4
+            for i, label in enumerate(labels[:grade_def.num_classes]):
+                home_room = f"{floor}{i + 1:02d}"  # z.B. 5a → "101", 6b → "202"
                 classes.append(SchoolClass(
                     id=f"{grade}{label}",
                     grade=grade,
                     label=label,
                     curriculum=curriculum.copy(),
                     max_slot=sek1_max,
+                    home_room=home_room,
                 ))
         return classes
 

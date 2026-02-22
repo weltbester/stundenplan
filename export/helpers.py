@@ -160,9 +160,9 @@ def format_entry(
 ) -> str:
     """Formatiert einen einzelnen Entry als Zelleninhalt.
 
-    mode='class':   "Fach\nLehrer-ID"  (+ "(lbl.)" für reli_ethik)
-    mode='teacher': "Fach\nKlasse"
-    mode='room':    "Klasse\nFach"
+    mode='class':   "Fach\nLehrer-ID[\nRaum]"  (Sonderraum + Klassenraum)
+    mode='teacher': "Fach\nKlasse[\nRaum]"     (nur Sonderraum; Klassenraum implizit)
+    mode='room':    "Klasse\nFach"              (Raum ist bereits der Kontext)
     """
     label = get_coupling_label(entry, school_data)
     subj = entry.subject
@@ -171,11 +171,17 @@ def format_entry(
         subj = f"{subj} ({abbrev})"
 
     if mode == "class":
-        return f"{subj}\n{entry.teacher_id}"
+        # Sonderraum hat Vorrang; sonst Klassenraum
+        room = entry.room or entry.home_room
+        room_part = f"\n{room}" if room else ""
+        return f"{subj}\n{entry.teacher_id}{room_part}"
     elif mode == "teacher":
-        return f"{subj}\n{entry.class_id}"
+        # Sonderraum hat Vorrang; sonst Klassenraum (home_room zeigt, wo die Klasse sitzt)
+        room = entry.room or entry.home_room
+        room_part = f"\n{room}" if room else ""
+        return f"{subj}\n{entry.class_id}{room_part}"
     elif mode == "room":
-        return f"{entry.class_id}\n{subj}"
+        return f"{entry.class_id}\n{subj}\n{entry.teacher_id}"
     return subj
 
 

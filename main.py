@@ -25,6 +25,8 @@ Verwendung:
   python main.py substitute --teacher T01 Vertretungsoptionen
 """
 
+__version__ = "1.1"
+
 import sys
 import logging
 from pathlib import Path
@@ -44,11 +46,11 @@ try:
 
     # ── Header / Footer ───────────────────────────────────────────────────────
     rc.HEADER_TEXT = (
-        "\n[bold cyan]╔══════════════════════════════════════════════╗[/bold cyan]\n"
+        "\n[bold cyan]╔═════════════════════════════════════════════════╗[/bold cyan]\n"
         "[bold cyan]║[/bold cyan]  [bold white]Stundenplan-Generator[/bold white]"
-        "  [dim]Gymnasium Sek I — v1.1[/dim]  "
+        f"  [dim]Gymnasium Sek I — v{__version__}[/dim]  "
         "[bold cyan]║[/bold cyan]\n"
-        "[bold cyan]╚══════════════════════════════════════════════╝[/bold cyan]\n"
+        "[bold cyan]╚═════════════════════════════════════════════════╝[/bold cyan]\n"
     )
     rc.FOOTER_TEXT = (
         "\n[dim]Erster Start? Führen Sie [bold]python main.py setup[/bold] aus.[/dim]\n"

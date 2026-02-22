@@ -25,7 +25,15 @@ import sys
 import logging
 from pathlib import Path
 
-import click
+try:
+    import rich_click as click
+    click.rich_click.TEXT_MARKUP = "markdown"
+    click.rich_click.SHOW_ARGUMENTS = True
+    click.rich_click.STYLE_COMMANDS_PANEL_BORDER = "bold blue"
+    click.rich_click.STYLE_OPTIONS_PANEL_BORDER = "dim blue"
+except ImportError:
+    import click
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -243,8 +251,16 @@ def cmd_import(datei: Path, save_json: bool, json_path: str):
               help="Pfad zur gespeicherten JSON-Datei.")
 @click.option("--generate", "gen_first", is_flag=True, default=False,
               help="Testdaten zunächst generieren (Seed 42).")
-def cmd_validate(json_path: str, gen_first: bool):
-    """Führt einen Machbarkeits-Check auf dem aktuellen Datensatz durch."""
+@click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
+              help="Pfad zur solution.json für Post-Solve-Validierung.")
+@click.option("--solution", "validate_solution", is_flag=True, default=False,
+              help="Post-Solve-Validierung der fertigen Lösung ausführen.")
+def cmd_validate(json_path: str, gen_first: bool,
+                 solution_path: str, validate_solution: bool):
+    """Führt einen Machbarkeits-Check auf dem aktuellen Datensatz durch.
+
+    Mit --solution wird zusätzlich die fertige Lösung auf Constraint-Verletzungen geprüft.
+    """
     from models.school_data import SchoolData
 
     if gen_first:
@@ -267,6 +283,27 @@ def cmd_validate(json_path: str, gen_first: bool):
     console.print(f"\n{data.summary()}\n")
     report = data.validate_feasibility()
     report.print_rich()
+
+    # Post-Solve Validierung
+    if validate_solution:
+        sol_path = Path(solution_path)
+        if not sol_path.exists():
+            console.print(
+                f"[red]Lösung nicht gefunden: {sol_path}[/red]\n"
+                "Führen Sie zunächst [bold]python main.py solve[/bold] aus."
+            )
+            sys.exit(1)
+        from solver.scheduler import ScheduleSolution
+        from analysis.solution_validator import SolutionValidator
+
+        console.print(f"\n[bold]Lade Lösung:[/bold] {sol_path}")
+        solution = ScheduleSolution.load_json(sol_path)
+        validator = SolutionValidator()
+        with console.status("[green]Validiere Lösung...[/green]"):
+            val_report = validator.validate(solution, data)
+        val_report.print_rich()
+        if not val_report.is_valid:
+            sys.exit(1)
 
     sys.exit(0 if report.is_feasible else 1)
 
@@ -855,6 +892,189 @@ def scenario_list():
     console.print(table)
 
 
+# ─── QUALITY ──────────────────────────────────────────────────────────────────
+
+@click.command("quality")
+@click.option("--json-path", default=str(DEFAULT_DATA_JSON),
+              help="Pfad zur school_data.json.")
+@click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
+              help="Pfad zur solution.json.")
+@click.option(
+    "--format", "fmt", default="console",
+    type=click.Choice(["console", "excel", "both"]),
+    help="Ausgabeformat: console, excel oder both.",
+)
+@click.option("--output-dir", default=str(DEFAULT_EXPORT_DIR),
+              help="Ausgabeverzeichnis für Excel-Export.")
+def cmd_quality(json_path: str, solution_path: str, fmt: str, output_dir: str):
+    """Erstellt einen Qualitätsbericht (Lehrer-Auslastung, Klassen-Qualität, KPIs)."""
+    from models.school_data import SchoolData
+    from solver.scheduler import ScheduleSolution
+    from analysis.quality_report import QualityAnalyzer
+
+    sol_path = Path(solution_path)
+    dat_path = Path(json_path)
+
+    for p, label in [(sol_path, "Lösung"), (dat_path, "Schuldaten")]:
+        if not p.exists():
+            console.print(f"[red]{label} nicht gefunden: {p}[/red]")
+            sys.exit(1)
+
+    console.print("[bold]Lade Daten...[/bold]")
+    solution    = ScheduleSolution.load_json(sol_path)
+    school_data = SchoolData.load_json(dat_path)
+
+    analyzer = QualityAnalyzer()
+    with console.status("[green]Analysiere Lösung...[/green]"):
+        report = analyzer.analyze(solution, school_data)
+
+    if fmt in ("console", "both"):
+        analyzer.print_rich(report, school_data.config)
+
+    if fmt in ("excel", "both"):
+        from export.excel_export import ExcelExporter
+        out_dir  = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        xlsx_path = out_dir / "stundenplan.xlsx"
+        console.print(f"[bold]Excel-Export mit Qualitätsblatt:[/bold] {xlsx_path}")
+        with console.status("[green]Excel wird erstellt...[/green]"):
+            ExcelExporter(solution, school_data).export(xlsx_path, quality_report=report)
+        console.print(f"[green]✓[/green] Excel gespeichert: {xlsx_path}")
+
+
+# ─── SUBSTITUTE ───────────────────────────────────────────────────────────────
+
+@click.command("substitute")
+@click.option("--teacher", "-t", required=True,
+              help="Lehrer-ID des abwesenden Lehrers (z.B. T01).")
+@click.option("--day", "-d", default=None,
+              help="Wochentag (z.B. 'montag', 'mo', '0'). Optional: alle Tage.")
+@click.option("--slot", "-s", default=None, type=int,
+              help="Slot-Nummer (1-basiert). Optional: alle Slots.")
+@click.option("--json-path", default=str(DEFAULT_DATA_JSON),
+              help="Pfad zur school_data.json.")
+@click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
+              help="Pfad zur solution.json.")
+@click.option("--top", default=5, show_default=True,
+              help="Maximal so viele Kandidaten pro Slot anzeigen.")
+def cmd_substitute(teacher: str, day, slot, json_path: str,
+                   solution_path: str, top: int):
+    """Findet geeignete Vertreter für einen abwesenden Lehrer.
+
+    Ohne --day/--slot werden Kandidaten für alle Slots des Lehrers angezeigt.
+
+    Beispiele:
+
+      python main.py substitute --teacher T01
+
+      python main.py substitute --teacher T01 --day montag --slot 3
+    """
+    from models.school_data import SchoolData
+    from solver.scheduler import ScheduleSolution
+    from analysis.substitution_helper import SubstitutionFinder
+
+    sol_path = Path(solution_path)
+    dat_path = Path(json_path)
+
+    for p, label in [(sol_path, "Lösung"), (dat_path, "Schuldaten")]:
+        if not p.exists():
+            console.print(f"[red]{label} nicht gefunden: {p}[/red]")
+            sys.exit(1)
+
+    solution    = ScheduleSolution.load_json(sol_path)
+    school_data = SchoolData.load_json(dat_path)
+    day_names   = school_data.config.time_grid.day_names
+
+    teacher_id = teacher.upper()
+    finder = SubstitutionFinder()
+
+    # Lehrer prüfen
+    teacher_obj = next(
+        (t for t in school_data.teachers if t.id == teacher_id), None
+    )
+    if teacher_obj is None:
+        console.print(f"[red]Lehrer '{teacher_id}' nicht gefunden.[/red]")
+        sys.exit(1)
+
+    def _resolve_day(day_str: str) -> int | None:
+        """Wandelt Tages-String in Index um (0=Mo..4=Fr)."""
+        day_lower = day_str.lower().strip()
+        aliases = {
+            "mo": 0, "montag": 0, "0": 0,
+            "di": 1, "dienstag": 1, "1": 1,
+            "mi": 2, "mittwoch": 2, "2": 2,
+            "do": 3, "donnerstag": 3, "3": 3,
+            "fr": 4, "freitag": 4, "4": 4,
+        }
+        return aliases.get(day_lower)
+
+    console.print(
+        f"\n[bold]Vertretungssuche für:[/bold] "
+        f"{teacher_id} – {teacher_obj.name}\n"
+        f"Fächer: {', '.join(teacher_obj.subjects)}\n"
+    )
+
+    if day is not None and slot is not None:
+        # Einzelner Slot
+        day_idx = _resolve_day(str(day))
+        if day_idx is None:
+            console.print(f"[red]Unbekannter Tag: '{day}'[/red]")
+            sys.exit(1)
+        day_name = day_names[day_idx] if day_idx < len(day_names) else str(day_idx)
+        candidates = finder.find_substitutes(
+            teacher_id, day_idx, slot, solution, school_data
+        )
+        _print_substitute_table(
+            console, candidates[:top],
+            title=f"Vertreter für {teacher_id} am {day_name}, Slot {slot}",
+        )
+    else:
+        # Alle Slots des Lehrers
+        all_candidates = finder.find_all_for_teacher(teacher_id, solution, school_data)
+        if not all_candidates:
+            console.print(
+                f"[yellow]Lehrer {teacher_id} hat keine Stunden in der Lösung.[/yellow]"
+            )
+            return
+        for slot_key, candidates in sorted(all_candidates.items()):
+            _print_substitute_table(
+                console, candidates[:top],
+                title=f"Vertreter für {teacher_id} – {slot_key}",
+            )
+
+
+def _print_substitute_table(console, candidates, title: str) -> None:
+    """Gibt eine Kandidaten-Tabelle aus."""
+    if not candidates:
+        console.print(f"[dim]{title}: Keine Kandidaten gefunden.[/dim]")
+        return
+
+    table = Table(title=title, box=box.ROUNDED, show_lines=False)
+    table.add_column("ID", width=8)
+    table.add_column("Name", width=25)
+    table.add_column("Gemeinsame Fächer", width=30)
+    table.add_column("Verfügbar", width=10, justify="center")
+    table.add_column("Ist/Max", justify="right", width=8)
+    table.add_column("Score", justify="right", width=8)
+
+    for c in candidates:
+        avail_str = "[green]Ja[/green]" if c.is_available_at_slot else "[red]Nein[/red]"
+        score_color = (
+            "green" if c.score >= 70
+            else "yellow" if c.score >= 40
+            else "red"
+        )
+        table.add_row(
+            c.teacher_id,
+            c.name,
+            ", ".join(c.subjects_match),
+            avail_str,
+            f"{c.current_load_hours}/{int(c.load_ratio * 100)}%",
+            f"[{score_color}]{c.score:.0f}[/{score_color}]",
+        )
+    console.print(table)
+
+
 # ─── HAUPT-CLI ────────────────────────────────────────────────────────────────
 
 @click.group()
@@ -894,6 +1114,8 @@ cli.add_command(cmd_pin)
 cli.add_command(cmd_export)
 cli.add_command(cmd_run)
 cli.add_command(cmd_scenario)
+cli.add_command(cmd_quality)
+cli.add_command(cmd_substitute)
 
 
 if __name__ == "__main__":

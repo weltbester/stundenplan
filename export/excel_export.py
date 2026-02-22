@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 from config.schema import LessonSlot, PauseSlot
 from models.school_data import SchoolData
@@ -39,13 +40,20 @@ class ExcelExporter:
 
     # ─── Öffentliche API ──────────────────────────────────────────────────────
 
-    def export(self, output_path: Path) -> None:
-        """Erstellt die Excel-Datei mit allen Sheets."""
+    def export(self, output_path: Path, quality_report=None) -> None:
+        """Erstellt die Excel-Datei mit allen Sheets.
+
+        quality_report: optionaler ScheduleQualityReport – wenn angegeben,
+        wird ein zusätzliches Qualitätsblatt eingefügt.
+        """
         from openpyxl import Workbook
         wb = Workbook()
         wb.remove(wb.active)   # Leeres Standard-Sheet entfernen
 
         self._sheet_uebersicht(wb)
+
+        if quality_report is not None:
+            self._sheet_qualitaet(wb, quality_report)
 
         for cls in sorted(self.data.classes, key=lambda c: c.id):
             self._sheet_klasse(wb, cls.id)
@@ -367,3 +375,126 @@ class ExcelExporter:
             (e.slot_number for e in entries), default=self.tg.sek1_max_slot
         )
         self._write_schedule_table(ws, entries, mode="room", max_slot=max_slot)
+
+    # ─── Sheet: Qualität ──────────────────────────────────────────────────────
+
+    def _sheet_qualitaet(self, wb, report) -> None:
+        """Erstellt ein Qualitätsblatt mit drei Tabellen.
+
+        Tab 1: Lehrer-Übersicht (Name, Min, Max, Ist, Gaps, Status)
+        Tab 2: Klassen-Übersicht (Klasse, Stunden/Tag, Doppelstunden-Rate)
+        Tab 3: KPI-Übersicht (Fairness-Index, Gesamt-Gaps, Doppelstunden-Rate)
+        """
+        from openpyxl.styles import Font
+
+        ws = wb.create_sheet(title="Qualität")
+        fill_h = self._fill(COLORS["header"])
+        border = self._thin_border()
+        row = 1
+
+        # ── KPI-Block ──────────────────────────────────────────────────────
+        ws.cell(row=row, column=1, value="Qualitätsbericht").font = Font(bold=True, size=13)
+        row += 1
+        ws.cell(row=row, column=1, value=f"Erstellt: {today_str()}")
+        ws.cell(row=row, column=3, value=f"Status: {report.solver_status}")
+        ws.cell(row=row, column=4, value=f"Zeit: {report.solve_time}s")
+        row += 2
+
+        kpi_headers = ["KPI", "Wert", "Bewertung"]
+        for col, h in enumerate(kpi_headers, 1):
+            c = ws.cell(row=row, column=col, value=h)
+            c.fill = fill_h
+            c.font = Font(bold=True, color="FFFFFF")
+            c.border = border
+        row += 1
+
+        kpis = [
+            ("Gesamt-Springstunden", str(report.total_gaps),
+             "gut" if report.total_gaps < 20 else "mittel" if report.total_gaps < 50 else "hoch"),
+            ("Ø Springstunden/Lehrer", f"{report.avg_gaps_per_teacher:.1f}",
+             "gut" if report.avg_gaps_per_teacher < 2 else "mittel"),
+            ("Deputat-Fairness (Jain)", f"{report.deputat_fairness_index:.4f}",
+             "gut" if report.deputat_fairness_index >= 0.95 else "mittel"),
+            ("Doppelstunden-Rate", f"{report.double_fulfillment_rate:.1%}",
+             "gut" if report.double_fulfillment_rate >= 0.90 else "mittel"),
+        ]
+        for name, value, rating in kpis:
+            ws.cell(row=row, column=1, value=name).border = border
+            ws.cell(row=row, column=2, value=value).border = border
+            ws.cell(row=row, column=3, value=rating).border = border
+            row += 1
+
+        row += 2
+
+        # ── Lehrer-Tabelle ────────────────────────────────────────────────
+        ws.cell(row=row, column=1, value="Lehrer-Auslastung").font = Font(bold=True, size=11)
+        row += 1
+        t_headers = ["ID", "Name", "Min", "Max", "Ist", "Gaps", "Freie Tage", "Status"]
+        for col, h in enumerate(t_headers, 1):
+            c = ws.cell(row=row, column=col, value=h)
+            c.fill = fill_h
+            c.font = Font(bold=True, color="FFFFFF")
+            c.border = border
+        row += 1
+
+        for m in sorted(report.teacher_metrics, key=lambda x: x.teacher_id):
+            if m.actual_hours < m.dep_min:
+                status = "Unter Min"
+                status_fill = self._fill("FFCCCC")
+            elif m.actual_hours > m.dep_max:
+                status = "Über Max"
+                status_fill = self._fill("FFEECC")
+            else:
+                status = "OK"
+                status_fill = self._fill("CCFFCC")
+
+            ws.cell(row=row, column=1, value=m.teacher_id).border = border
+            ws.cell(row=row, column=2, value=m.name).border = border
+            ws.cell(row=row, column=3, value=m.dep_min).border = border
+            ws.cell(row=row, column=4, value=m.dep_max).border = border
+            c_ist = ws.cell(row=row, column=5, value=m.actual_hours)
+            c_ist.border = border
+            ws.cell(row=row, column=6, value=m.gaps_total).border = border
+            ws.cell(row=row, column=7, value=m.free_days).border = border
+            c_status = ws.cell(row=row, column=8, value=status)
+            c_status.border = border
+            c_status.fill = status_fill
+            row += 1
+
+        row += 2
+
+        # ── Klassen-Tabelle ───────────────────────────────────────────────
+        ws.cell(row=row, column=1, value="Klassen-Qualität").font = Font(bold=True, size=11)
+        row += 1
+        c_headers = ["Klasse", "Stunden", "Doppelstd. Soll", "Doppelstd. Ist", "Spread-Score"]
+        for col, h in enumerate(c_headers, 1):
+            c = ws.cell(row=row, column=col, value=h)
+            c.fill = fill_h
+            c.font = Font(bold=True, color="FFFFFF")
+            c.border = border
+        row += 1
+
+        for m in sorted(report.class_metrics, key=lambda x: x.class_id):
+            ws.cell(row=row, column=1, value=m.class_id).border = border
+            ws.cell(row=row, column=2, value=m.total_hours).border = border
+            ws.cell(row=row, column=3, value=m.double_requested).border = border
+            ws.cell(row=row, column=4, value=m.double_fulfilled).border = border
+            c_spread = ws.cell(row=row, column=5, value=m.subject_spread_score)
+            c_spread.border = border
+            if m.subject_spread_score >= 0.7:
+                c_spread.fill = self._fill("CCFFCC")
+            elif m.subject_spread_score >= 0.4:
+                c_spread.fill = self._fill("FFFFCC")
+            else:
+                c_spread.fill = self._fill("FFCCCC")
+            row += 1
+
+        # Spaltenbreiten
+        ws.column_dimensions["A"].width = 12
+        ws.column_dimensions["B"].width = 28
+        ws.column_dimensions["C"].width = 8
+        ws.column_dimensions["D"].width = 8
+        ws.column_dimensions["E"].width = 8
+        ws.column_dimensions["F"].width = 8
+        ws.column_dimensions["G"].width = 10
+        ws.column_dimensions["H"].width = 12

@@ -19,6 +19,10 @@ Verwendung:
   python main.py scenario save <name>     Szenario speichern
   python main.py scenario load <name>     Szenario laden
   python main.py scenario list            Szenarien auflisten
+  python main.py show 5a                  Stundenplan Klasse 5a im Terminal
+  python main.py show MÜL                 Stundenplan Lehrer MÜL im Terminal
+  python main.py quality                  Qualitätsbericht anzeigen
+  python main.py substitute --teacher T01 Vertretungsoptionen
 """
 
 import sys
@@ -35,11 +39,41 @@ except ImportError:
     import click
 
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
 console = Console()
+
+# ─── LOGGING ──────────────────────────────────────────────────────────────────
+
+_LOG_FILE = Path("output/stundenplan.log")
+
+
+def _setup_logging(verbose: bool = False) -> None:
+    """Richtet Logging mit RichHandler (Konsole) + FileHandler (Log-Datei) ein."""
+    level = logging.DEBUG if verbose else logging.INFO
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    handlers: list[logging.Handler] = [
+        RichHandler(
+            console=console,
+            rich_tracebacks=True,
+            show_path=False,
+            markup=True,
+        ),
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+    ]
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)-8s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers,
+        force=True,
+    )
+    # Unterdrücke OR-Tools-Rauschen auf Konsole (landet trotzdem im Log)
+    logging.getLogger("ortools").setLevel(logging.WARNING)
 
 # Standard-Pfad für gespeicherte SchoolData
 DEFAULT_DATA_JSON = Path("output/school_data.json")
@@ -443,9 +477,7 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
     from solver.scheduler import ScheduleSolver
     from solver.pinning import PinManager
 
-    if verbose:
-        logging.basicConfig(level=logging.INFO,
-                            format="%(levelname)s %(message)s")
+    _setup_logging(verbose=verbose)
 
     # ── Daten laden ──────────────────────────────────────────────────────────
     if small:
@@ -1075,6 +1107,264 @@ def _print_substitute_table(console, candidates, title: str) -> None:
     console.print(table)
 
 
+# ─── SHOW (Terminal-Viewer) ───────────────────────────────────────────────────
+
+# Rich-Stile für Fachkategorien (statt Hex: Näherungswerte als rich-Farbnamen)
+_CATEGORY_STYLE: dict[str, str] = {
+    "hauptfach":    "bold blue",
+    "sprache":      "bold yellow",
+    "nw":           "bold green",
+    "musisch":      "bold magenta",
+    "sport":        "bold red",
+    "gesellschaft": "bold cyan",
+    "wpf":          "dim white",
+    "sonstig":      "dim white",
+}
+
+
+def _subject_style(subject_name: str, subjects) -> str:
+    """Gibt einen rich-Stil für ein Fach zurück."""
+    for s in subjects:
+        if s.name == subject_name:
+            return _CATEGORY_STYLE.get(s.category, "dim white")
+    return "dim white"
+
+
+@click.command("show")
+@click.argument("kennung")
+@click.option("--json-path", default=str(DEFAULT_DATA_JSON),
+              show_default=True, help="Pfad zur SchoolData-JSON.")
+@click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
+              show_default=True, help="Pfad zur Lösungs-JSON.")
+def cmd_show(kennung: str, json_path: str, solution_path: str):
+    """Zeigt einen Stundenplan im Terminal an.
+
+    KENNUNG ist entweder eine Klassen-ID (z.B. 5a, 10c) oder ein
+    Lehrer-Kürzel (z.B. MÜL, SCH).
+    """
+    from models.school_data import SchoolData
+    from solver.scheduler import ScheduleSolution
+    from export.helpers import (
+        build_time_grid_rows, get_coupling_label, count_gaps,
+        count_teacher_actual_hours,
+    )
+    from config.schema import LessonSlot, PauseSlot
+
+    data_path = Path(json_path)
+    sol_path = Path(solution_path)
+    if not data_path.exists() or not sol_path.exists():
+        console.print(
+            "[red]Keine gespeicherte Lösung gefunden.[/red]\n"
+            "Führen Sie zuerst [bold]python main.py solve[/bold] aus."
+        )
+        sys.exit(1)
+
+    school_data = SchoolData.load_json(data_path)
+    solution = ScheduleSolution.load_json(sol_path)
+    config = solution.config_snapshot
+
+    # ── Identifiziere Modus: Klasse oder Lehrer? ─────────────────────────────
+    class_ids = {c.id for c in school_data.classes}
+    teacher_ids = {t.id for t in school_data.teachers}
+
+    # Suche case-insensitive
+    kennung_lower = kennung.lower()
+    matched_class = next(
+        (cid for cid in class_ids if cid.lower() == kennung_lower), None
+    )
+    matched_teacher = next(
+        (tid for tid in teacher_ids if tid.lower() == kennung_lower), None
+    )
+
+    if matched_class:
+        _show_class_schedule(
+            matched_class, solution, school_data, config,
+            build_time_grid_rows, get_coupling_label, LessonSlot, PauseSlot,
+        )
+    elif matched_teacher:
+        _show_teacher_schedule(
+            matched_teacher, solution, school_data, config,
+            build_time_grid_rows, count_gaps,
+            count_teacher_actual_hours, LessonSlot, PauseSlot,
+        )
+    else:
+        console.print(
+            f"[red]Kennung '[bold]{kennung}[/bold]' nicht gefunden.[/red]\n"
+            f"Gültige Klassen: {', '.join(sorted(class_ids)[:10])} ...\n"
+            f"Gültige Lehrer:  {', '.join(sorted(teacher_ids)[:10])} ..."
+        )
+        sys.exit(1)
+
+
+def _show_class_schedule(
+    class_id, solution, school_data, config,
+    build_time_grid_rows, get_coupling_label, LessonSlot, PauseSlot,
+) -> None:
+    """Zeigt den Stundenplan einer Klasse als rich-Tabelle."""
+    cls = next(c for c in school_data.classes if c.id == class_id)
+    entries = solution.get_class_schedule(class_id)
+
+    # Index: (day, slot_number) → entry
+    slot_map: dict[tuple[int, int], object] = {}
+    for e in entries:
+        slot_map[(e.day, e.slot_number)] = e
+
+    day_names = config.time_grid.day_names
+    time_rows = build_time_grid_rows(config, max_slot=cls.max_slot)
+
+    table = Table(
+        title=f"Stundenplan Klasse [bold]{class_id}[/bold]",
+        box=box.ROUNDED,
+        show_lines=True,
+        header_style="bold white on blue",
+    )
+    table.add_column("Std.", width=5, justify="center")
+    table.add_column("Zeit", width=13, justify="center")
+    for d in day_names:
+        table.add_column(d, width=18, justify="center")
+
+    for row in time_rows:
+        if isinstance(row, PauseSlot):
+            table.add_row(
+                "—", row.label,
+                *["─" * 10] * len(day_names),
+                style="dim",
+            )
+            continue
+
+        slot = row  # LessonSlot
+        cells = []
+        for day_idx in range(len(day_names)):
+            entry = slot_map.get((day_idx, slot.slot_number))
+            if entry is None:
+                cells.append("[dim]—[/dim]")
+            else:
+                label = get_coupling_label(entry, school_data)
+                subj = entry.subject
+                if label:
+                    abbrev = label[:3].lower() + "."
+                    subj = f"{subj} ({abbrev})"
+                style = _subject_style(entry.subject, school_data.subjects)
+                room_part = f"\n[dim]{entry.room}[/dim]" if entry.room else ""
+                cells.append(
+                    f"[{style}]{subj}[/{style}]\n"
+                    f"[dim]{entry.teacher_id}[/dim]{room_part}"
+                )
+
+        table.add_row(
+            str(slot.slot_number),
+            f"{slot.start_time}–{slot.end_time}",
+            *cells,
+        )
+
+    console.print(table)
+    console.print(
+        f"[dim]Klasse {class_id} | Jahrgang {cls.grade} | "
+        f"Soll: {sum(cls.curriculum.values())}h/Woche[/dim]"
+    )
+
+
+def _show_teacher_schedule(
+    teacher_id, solution, school_data, config,
+    build_time_grid_rows, count_gaps, count_teacher_actual_hours,
+    LessonSlot, PauseSlot,
+) -> None:
+    """Zeigt den Stundenplan eines Lehrers als rich-Tabelle."""
+    teacher = next(t for t in school_data.teachers if t.id == teacher_id)
+    entries = solution.get_teacher_schedule(teacher_id)
+
+    # Bestimme max genutzten Slot
+    used_slots = [e.slot_number for e in entries]
+    max_slot = max(used_slots) if used_slots else config.time_grid.sek1_max_slot
+    time_rows = build_time_grid_rows(config, max_slot=max_slot)
+
+    # Index: (day, slot_number) → entry
+    # Kopplungen können mehrere Entries pro Slot haben → nimm ersten
+    slot_map: dict[tuple[int, int], object] = {}
+    for e in entries:
+        key = (e.day, e.slot_number)
+        if key not in slot_map:
+            slot_map[key] = e
+
+    day_names = config.time_grid.day_names
+
+    # Ermittle Springstunden pro Tag für Farbmarkierung
+    from collections import defaultdict
+    by_day: dict[int, list[int]] = defaultdict(list)
+    for e in entries:
+        by_day[e.day].append(e.slot_number)
+    gap_slots: set[tuple[int, int]] = set()
+    for day_idx, slots in by_day.items():
+        unique = sorted(set(slots))
+        if len(unique) > 1:
+            first, last = unique[0], unique[-1]
+            for h in range(first + 1, last):
+                if h not in unique:
+                    gap_slots.add((day_idx, h))
+
+    ist_hours = count_teacher_actual_hours(entries, teacher_id)
+    gaps_total = count_gaps(entries)
+
+    table = Table(
+        title=(
+            f"Stundenplan [bold]{teacher_id}[/bold] — "
+            f"{teacher.name} | "
+            f"Deputat: {teacher.deputat_min}–{teacher.deputat_max}h | "
+            f"Ist: {ist_hours}h | Springstd: {gaps_total}"
+        ),
+        box=box.ROUNDED,
+        show_lines=True,
+        header_style="bold white on blue",
+    )
+    table.add_column("Std.", width=5, justify="center")
+    table.add_column("Zeit", width=13, justify="center")
+    for d in day_names:
+        table.add_column(d, width=18, justify="center")
+
+    for row in time_rows:
+        if isinstance(row, PauseSlot):
+            table.add_row(
+                "—", row.label,
+                *["─" * 10] * len(day_names),
+                style="dim",
+            )
+            continue
+
+        slot = row
+        cells = []
+        row_style = None
+        for day_idx in range(len(day_names)):
+            key = (day_idx, slot.slot_number)
+            entry = slot_map.get(key)
+            if entry is None:
+                if key in gap_slots:
+                    cells.append("[bold red]↕ Springstunde[/bold red]")
+                    row_style = "on dark_red"
+                else:
+                    cells.append("[dim]—[/dim]")
+            else:
+                style = _subject_style(entry.subject, school_data.subjects)
+                room_part = f"\n[dim]{entry.room}[/dim]" if entry.room else ""
+                cells.append(
+                    f"[{style}]{entry.subject}[/{style}]\n"
+                    f"[dim]{entry.class_id}[/dim]{room_part}"
+                )
+
+        table.add_row(
+            str(slot.slot_number),
+            f"{slot.start_time}–{slot.end_time}",
+            *cells,
+            style=row_style,
+        )
+
+    console.print(table)
+    subjects_str = ", ".join(sorted(set(teacher.subjects)))
+    console.print(
+        f"[dim]Fächer: {subjects_str} | "
+        f"{'Teilzeit' if teacher.is_teilzeit else 'Vollzeit'}[/dim]"
+    )
+
+
 # ─── HAUPT-CLI ────────────────────────────────────────────────────────────────
 
 @click.group()
@@ -1116,6 +1406,7 @@ cli.add_command(cmd_run)
 cli.add_command(cmd_scenario)
 cli.add_command(cmd_quality)
 cli.add_command(cmd_substitute)
+cli.add_command(cmd_show)
 
 
 if __name__ == "__main__":

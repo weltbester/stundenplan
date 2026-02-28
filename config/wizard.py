@@ -237,7 +237,14 @@ def _wizard_teachers() -> TeacherConfig:
     max_day = IntPrompt.ask("Max. Unterrichtsstunden pro Tag (global)", default=6)
     max_gaps_day = IntPrompt.ask("Max. Springstunden pro Tag (global)", default=1)
     max_gaps_week = IntPrompt.ask("Max. Springstunden pro Woche (global)", default=3)
-    tol = IntPrompt.ask("Deputat-Toleranz (± Stunden)", default=1)
+    fraction = FloatPrompt.ask(
+        "Mindest-Auslastung der Lehrkräfte (0.5–1.0, z.B. 0.50 = Sicherheitsboden)",
+        default=0.50,
+    )
+    buffer = IntPrompt.ask(
+        "Mehrarbeit-Puffer über Vertrags-Deputat (Stunden, 0–6; größerer Wert = mehr Solver-Spielraum)",
+        default=6,
+    )
 
     _success("Lehrkräfte-Konfiguration abgeschlossen.")
     return TeacherConfig(
@@ -249,7 +256,8 @@ def _wizard_teachers() -> TeacherConfig:
         max_hours_per_day=max_day,
         max_gaps_per_day=max_gaps_day,
         max_gaps_per_week=max_gaps_week,
-        deputat_tolerance=tol,
+        deputat_min_fraction=fraction,
+        deputat_max_buffer=buffer,
     )
 
 

@@ -7,6 +7,9 @@ class SchoolType(str, Enum):
     GYMNASIUM = "gymnasium"
     REALSCHULE = "realschule"
     GESAMTSCHULE = "gesamtschule"
+    HAUPTSCHULE = "hauptschule"
+    BERUFSSCHULE = "berufsschule"
+    GEMEINSCHAFTSSCHULE = "gemeinschaftsschule"
 
 
 # ─── ZEITRASTER (vollständig konfigurierbar) ───
@@ -164,9 +167,18 @@ class TeacherConfig(BaseModel):
     # Globaler Default: max. Springstunden pro Woche
     max_gaps_per_week: int = Field(3, ge=0, le=10,
         description="Max Springstunden pro Woche (globaler Default)")
-    # Erlaubte Abweichung vom Soll-Deputat (±Stunden)
-    deputat_tolerance: int = Field(1, ge=0, le=3,
-        description="Erlaubte Abweichung vom Soll-Deputat (±)")
+    # Mindestauslastung relativ zu deputat_max (0.5–1.0)
+    # 0.50 = Sicherheitsboden; in Produktionskonfigurationen eher 0.75–0.90.
+    deputat_min_fraction: float = Field(
+        0.50, ge=0.5, le=1.0,
+        description="Mindestauslastung relativ zu deputat_max (0.5–1.0)"
+    )
+    # Mehrarbeit-Puffer über dem Vertrags-Deputat (0–6h, typisch 1–3h)
+    # Gibt dem Solver Spielraum; z.B. 6 → VZ-Lehrer kann bis zu 32h statt 26h zugewiesen bekommen.
+    deputat_max_buffer: int = Field(
+        6, ge=0, le=6,
+        description="Mehrarbeit-Puffer über Deputat für Solver-Flexibilität (0–6h)"
+    )
 
 
 # ─── FACHRÄUME ───
@@ -248,7 +260,7 @@ class SolverConfig(BaseModel):
     num_workers: int = Field(0, ge=0,
         description="CPU-Kerne (0=automatisch)")
     # Gewicht für Minimierung von Springstunden
-    weight_gaps: int = Field(100, ge=0,
+    weight_gaps: int = Field(200, ge=0,
         description="Gewicht: Springstunden minimieren")
     # Gewicht für gleichmäßige Verteilung der Arbeitslast
     weight_workload_balance: int = Field(50, ge=0,
@@ -265,6 +277,17 @@ class SolverConfig(BaseModel):
     # Gewicht für Verteilung von Hauptfächern über die Woche
     weight_subject_spread: int = Field(60, ge=0,
         description="Gewicht: Hauptfächer über Woche verteilen")
+    # Gewicht für Deputat-Auslastung (immer aktiv, auch bei --no-soft)
+    # Minimiert sum(dep_max - actual): Solver strebt dep_max an; dep_min ist nur Sicherheitsboden.
+    weight_deputat_deviation: int = Field(50, ge=0,
+        description="Gewicht: Deputat-Auslastung maximieren (immer aktiv)")
+    # Harte Obergrenze Springstunden pro Lehrer/Woche.
+    # 0 = kein hartes Limit (empfohlen): kein deutsches Bundesland schreibt eine konkrete
+    # Zahl vor. Stark gekoppelte Lehrer (Religion, WPF) haben strukturell 10-15 Lücken/Woche,
+    # weil Kopplungszeiten durch Klassenkonflikte fixiert sind – ein enges Limit erzeugt INFEASIBLE.
+    # Wer einen schulinternen Richtwert durchsetzen möchte, kann z. B. 14 oder 20 setzen.
+    max_gaps_per_week: int = Field(0, ge=0,
+        description="Max. Springstunden pro Lehrer/Woche (0=kein Limit, nur Soft-Minimierung)")
 
 
 # ─── GESAMT-CONFIG ───

@@ -203,7 +203,7 @@ STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
         "Mathematik":   4,
         "Englisch":     3,
         "Biologie":     2,
-        "Erdkunde":     2,
+        "Erdkunde":     1,   # 2→1: Slot-Budget (37h → 34h)
         "Geschichte":   2,
         "Politik":      2,
         "Kunst":        2,
@@ -213,17 +213,17 @@ STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
         "Physik":       2,
         "Chemie":       2,
         "Informatik":   0,
-        "Latein":       2,
+        "Latein":       0,   # entfernt: WPF-Block ersetzt Latein-Slot
         "Französisch":  0,
-        "WPF":          3,   # Wahlpflichtfach ab Jg. 9
-    },  # Summe: 35h → wird bei einzelnen Schülern aufgeteilt
+        "WPF":          3,   # Wahlpflichtfach ab Jg. 9 (via Kopplung)
+    },  # Summe: 34h (29h regular + 2h Reli-Kopplung + 3h WPF-Kopplung), 1 Slot frei
     10: {
         "Deutsch":      4,
         "Mathematik":   4,
         "Englisch":     3,
         "Biologie":     2,
-        "Erdkunde":     2,
-        "Geschichte":   3,
+        "Erdkunde":     1,   # 2→1: Slot-Budget
+        "Geschichte":   2,   # 3→2: Slot-Budget (38h → 34h)
         "Politik":      2,
         "Kunst":        2,
         "Musik":        2,
@@ -232,10 +232,10 @@ STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
         "Physik":       2,
         "Chemie":       2,
         "Informatik":   0,
-        "Latein":       2,
+        "Latein":       0,   # entfernt: WPF-Block ersetzt Latein-Slot
         "Französisch":  0,
         "WPF":          3,
-    },  # Summe: 36h → Abrundung durch individuelle Wahl
+    },  # Summe: 34h (29h regular + 2h Reli-Kopplung + 3h WPF-Kopplung), 1 Slot frei
 }
 
 

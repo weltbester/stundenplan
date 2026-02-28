@@ -16,6 +16,7 @@ class Teacher(BaseModel):
     preferred_free_days: list[int] = []           # 0=Mo..4=Fr
     max_hours_per_day: int = 6
     max_gaps_per_day: int = 2
+    max_gaps_per_week: int = 5   # pro-Lehrer-Limit; 0 = kein Limit
 
     @property
     def deputat(self) -> int:

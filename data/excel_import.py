@@ -66,6 +66,44 @@ def _parse_free_days(raw: str) -> list[int]:
     return result
 
 
+def _parse_sperrslots(raw: str) -> list[tuple[int, int]]:
+    """Parst neues Sperrzeiten-Format 'Mo:3,Di:1' → [(0,3),(1,1)].
+
+    Unterstützt Komma- und Semikolon-Trennung; Tag und Slot durch Doppelpunkt getrennt.
+    """
+    if not raw.strip():
+        return []
+    result = []
+    for token in raw.replace(";", ",").split(","):
+        token = token.strip()
+        if ":" not in token:
+            continue
+        day_str, _, slot_str = token.partition(":")
+        day_str = day_str.strip().lower()
+        slot_str = slot_str.strip()
+        if day_str in _DAY_MAP:
+            try:
+                result.append((_DAY_MAP[day_str], int(slot_str)))
+            except ValueError:
+                pass
+    return result
+
+
+def _parse_free_days_flexible(raw: str) -> list[int]:
+    """Parst Wunschtage mit Leerzeichen- oder Komma-Trennung 'Fr Mo' → [4,0]."""
+    import re
+    if not raw.strip():
+        return []
+    result = []
+    for token in re.split(r'[\s,;]+', raw.strip()):
+        token = token.strip().lower()
+        if token in _DAY_MAP:
+            day = _DAY_MAP[token]
+            if day not in result:
+                result.append(day)
+    return result
+
+
 def _fuzzy_subject(name: str, known: list[str]) -> Optional[str]:
     """Fuzzy-Matching: Findet das ähnlichste bekannte Fach."""
     matches = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
@@ -253,11 +291,12 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         "Name (Nachname, Vorname)", "Kürzel", "Fächer (kommagetrennt)",
         "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
         "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
+        "Sperrslots (Tag:Slot,...)", "Wunsch-frei (Tage)", "Max Springstd/Woche",
     ]
     for col, h in enumerate(lk_headers, 1):
         style_header(ws_lk.cell(row=1, column=col, value=h))
 
-    widths_lk = [28, 10, 32, 10, 10, 26, 22, 12, 16]
+    widths_lk = [28, 10, 32, 10, 10, 26, 22, 12, 16, 22, 18, 18]
     for col, w in enumerate(widths_lk, 1):
         set_col_width(ws_lk, col, w)
 
@@ -265,6 +304,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     example_row = [
         "Müller, Hans", "MÜL", "Mathematik, Physik",
         26, "nein", "Mi5", "Fr", 6, 2,
+        "Mo:3,Fr:6", "Fr", 5,
     ]
     for col, val in enumerate(example_row, 1):
         style_example(ws_lk.cell(row=2, column=col, value=val))
@@ -294,6 +334,14 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     )
     dv_max_g.sqref = "I3:I200"
     ws_lk.add_data_validation(dv_max_g)
+
+    dv_max_gw = DataValidation(
+        type="whole", operator="between",
+        formula1="0", formula2="20",
+        allow_blank=True,
+    )
+    dv_max_gw.sqref = "L3:L200"
+    ws_lk.add_data_validation(dv_max_gw)
 
     # ── Blatt 6: Fachräume ────────────────────────────────────────────────────
     ws_fr = wb.create_sheet("Fachräume")
@@ -692,15 +740,27 @@ class ExcelImporter:
             tz_raw = row.get("teilzeit", "nein").strip().lower()
             is_teilzeit = tz_raw in ("ja", "yes", "true", "1", "x")
 
-            # Sperrzeiten
-            blocked_raw = row.get("sperrzeiten (z.b. mo1,di3,fr5)",
-                                  row.get("sperrzeiten", ""))
-            unavailable = _parse_blocked_slots(blocked_raw)
+            # Sperrzeiten — neues Format (Tag:Slot) hat Vorrang vor altem Format
+            sperrslots_raw = row.get(
+                "sperrslots (tag:slot,...)", row.get("sperrslots", "")
+            ).strip()
+            if sperrslots_raw:
+                unavailable = _parse_sperrslots(sperrslots_raw)
+            else:
+                blocked_raw = row.get("sperrzeiten (z.b. mo1,di3,fr5)",
+                                      row.get("sperrzeiten", ""))
+                unavailable = _parse_blocked_slots(blocked_raw)
 
-            # Wunschtage
-            wishes_raw = row.get("wunschtage (z.b. mo,fr)",
-                                 row.get("wunschtage", ""))
-            free_days = _parse_free_days(wishes_raw)
+            # Wunschtage — neues Format (Leerzeichen/Komma) hat Vorrang
+            wunsch_frei_raw = row.get(
+                "wunsch-frei (tage)", row.get("wunsch-frei", "")
+            ).strip()
+            if wunsch_frei_raw:
+                free_days = _parse_free_days_flexible(wunsch_frei_raw)
+            else:
+                wishes_raw = row.get("wunschtage (z.b. mo,fr)",
+                                     row.get("wunschtage", ""))
+                free_days = _parse_free_days(wishes_raw)
 
             # Max Std/Tag
             max_h_raw = row.get("max std/tag", row.get("max_std_tag", "")).strip()
@@ -716,6 +776,13 @@ class ExcelImporter:
             except ValueError:
                 max_g = tc.max_gaps_per_day
 
+            # Max Springstd/Woche (pro-Lehrer)
+            max_gw_raw = row.get("max springstd/woche", "").strip()
+            try:
+                max_gw = int(float(max_gw_raw)) if max_gw_raw else tc.max_gaps_per_week
+            except ValueError:
+                max_gw = tc.max_gaps_per_week
+
             deputat_max = deputat + tc.deputat_max_buffer
             deputat_min = max(1, round(deputat_max * tc.deputat_min_fraction))
             teachers.append(Teacher(
@@ -729,6 +796,7 @@ class ExcelImporter:
                 preferred_free_days=free_days,
                 max_hours_per_day=max_h,
                 max_gaps_per_day=max_g,
+                max_gaps_per_week=max_gw,
             ))
 
         if not teachers:

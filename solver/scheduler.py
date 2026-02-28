@@ -191,12 +191,29 @@ class ScheduleSolver:
         pins: list[PinnedLesson] = [],
         use_soft: bool = True,
         weights: Optional[dict] = None,
-        use_two_pass: bool = False,
+        use_two_pass: Optional[bool] = None,
     ) -> ScheduleSolution:
-        """Löst das Stundenplan-Problem und gibt eine Lösung zurück."""
+        """Löst das Stundenplan-Problem und gibt eine Lösung zurück.
+
+        Args:
+            use_two_pass: True = erzwingen, False = deaktivieren,
+                          None = automatisch (aktiviert bei ≥ 20 Klassen).
+        """
         self._pinned_lessons = list(pins)
 
         t0 = time.time()
+
+        # Adaptive Two-Pass: auto-aktivieren wenn use_two_pass=None und ≥ 20 Klassen
+        if use_two_pass is None:
+            num_classes = len(self.data.classes)
+            if num_classes >= 20:
+                use_two_pass = True
+                logger.info(
+                    "Adaptive Two-Pass aktiviert: %d Klassen ≥ Schwellwert 20",
+                    num_classes,
+                )
+            else:
+                use_two_pass = False
 
         self._build_slot_index()
         self._build_coupling_coverage()

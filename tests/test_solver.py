@@ -1202,6 +1202,36 @@ class TestTwoPassSolver:
         solution = solver.solve(use_soft=False, use_two_pass=True)
         assert solution.phase1_time_seconds >= 0
 
+    def test_adaptive_two_pass_auto_enables(self, caplog):
+        """Bei ≥ 20 Klassen und use_two_pass=None: Two-Pass wird automatisch aktiviert."""
+        import logging
+
+        config = make_mini_config(time_limit=30)
+        sek1_max = config.time_grid.sek1_max_slot
+
+        # 20 Klassen genau am Schwellwert → Adaptive Two-Pass aktiviert
+        classes = [
+            SchoolClass(
+                id=f"{g}{lbl}", grade=g, label=lbl, curriculum={}, max_slot=sek1_max
+            )
+            for g in range(5, 10) for lbl in "abcd"  # 5 * 4 = 20 Klassen
+        ]
+        data = SchoolData(
+            subjects=[],
+            rooms=[],
+            classes=classes,
+            teachers=[],
+            couplings=[],
+            config=config,
+        )
+        solver = ScheduleSolver(data)
+        with caplog.at_level(logging.INFO, logger="solver.scheduler"):
+            solver.solve(use_soft=False, use_two_pass=None)
+
+        assert any("Adaptive Two-Pass" in r.message for r in caplog.records), (
+            "Adaptive Two-Pass sollte bei 20 Klassen automatisch aktiviert worden sein"
+        )
+
 
 class TestIncrementalSolve:
     """Inkrementeller Re-Solve und _identify_affected_teachers."""

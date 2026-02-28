@@ -543,3 +543,89 @@ class TestSubstitutionFinder:
         for slot_key, candidates in all_results.items():
             for c in candidates:
                 assert c.load_ratio >= 0.0
+
+
+# ─── DIFF ────────────────────────────────────────────────────────────────────
+
+class TestSchoolDataDiff:
+    """Tests für diff_school_data(): strukturierter Vergleich zweier SchoolData."""
+
+    def _base_data(self) -> SchoolData:
+        """Einfacher Basis-Datensatz für Diff-Tests."""
+        config = _make_mini_config()
+        sek1_max = config.time_grid.sek1_max_slot
+        return SchoolData(
+            subjects=[
+                Subject(name="Deutsch", short_name="D", category="sprachen",
+                        is_hauptfach=True, requires_special_room=None,
+                        double_lesson_required=False, double_lesson_preferred=False),
+            ],
+            rooms=[],
+            classes=[
+                SchoolClass(id="5a", grade=5, label="a",
+                            curriculum={"Deutsch": 4}, max_slot=sek1_max),
+            ],
+            teachers=[
+                Teacher(id="T01", name="Müller, Anna", subjects=["Deutsch"],
+                        deputat_max=9, deputat_min=4),
+            ],
+            couplings=[],
+            config=config,
+        )
+
+    def test_diff_no_changes(self):
+        """Identische Datensätze ergeben leeren Diff."""
+        from analysis.diff import diff_school_data
+
+        data = self._base_data()
+        diff = diff_school_data(data, data)
+        assert diff.is_empty(), f"Erwartete leeren Diff, got: {diff}"
+
+    def test_diff_teacher_added(self):
+        """Hinzugefügte Lehrkraft wird erkannt."""
+        from analysis.diff import diff_school_data
+
+        a = self._base_data()
+        b = a.model_copy(update={
+            "teachers": a.teachers + [
+                Teacher(id="T02", name="Schmidt, Hans", subjects=["Deutsch"],
+                        deputat_max=9, deputat_min=4),
+            ]
+        })
+        diff = diff_school_data(a, b)
+        assert "T02" in diff.teachers_added
+        assert not diff.teachers_removed
+        assert not diff.is_empty()
+
+    def test_diff_curriculum_changed(self):
+        """Geänderte Stundenzahl im Curriculum wird erkannt."""
+        from analysis.diff import diff_school_data
+
+        a = self._base_data()
+        new_class = a.classes[0].model_copy(update={"curriculum": {"Deutsch": 5}})
+        b = a.model_copy(update={"classes": [new_class]})
+        diff = diff_school_data(a, b)
+        assert len(diff.curriculum_changes) == 1
+        ch = diff.curriculum_changes[0]
+        assert ch.class_id == "5a"
+        assert ch.subject == "Deutsch"
+        assert ch.old_hours == 4
+        assert ch.new_hours == 5
+
+    def test_diff_json_format(self, tmp_path):
+        """--format json gibt valides JSON zurück."""
+        import json
+        from analysis.diff import diff_school_data
+
+        a = self._base_data()
+        b = a.model_copy(update={
+            "teachers": a.teachers + [
+                Teacher(id="T99", name="Neu, Person", subjects=["Deutsch"],
+                        deputat_max=9, deputat_min=4),
+            ]
+        })
+        diff = diff_school_data(a, b)
+        json_str = diff.to_json()
+        parsed = json.loads(json_str)
+        assert "teachers_added" in parsed
+        assert "T99" in parsed["teachers_added"]

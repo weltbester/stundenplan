@@ -807,6 +807,97 @@ class TestExcelImport:
         assert classes[0].curriculum.get("Deutsch") == 5
         assert classes[0].curriculum.get("Mathematik") == 4
 
+    def test_import_teachers_sperrslots(self, tmp_path: Path):
+        """Neues Sperrslots-Format 'Mo:3,Di:1' wird korrekt in unavailable_slots geparsed."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lehrkräfte"
+        ws.append([
+            "Name (Nachname, Vorname)", "Kürzel", "Fächer (kommagetrennt)",
+            "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+            "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
+            "Sperrslots (Tag:Slot,...)", "Wunsch-frei (Tage)", "Max Springstd/Woche",
+        ])
+        ws.append([
+            "Müller, Hans", "TST", "Mathematik",
+            26, "nein", "", "", 6, 2,
+            "Mo:3,Di:1", "", "",
+        ])
+        path = tmp_path / "lk.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        teachers = importer.import_teachers()
+        assert len(teachers) == 1
+        slots = teachers[0].unavailable_slots
+        assert (0, 3) in slots, f"Mo:3 sollte als (0,3) geparsed werden, got {slots}"
+        assert (1, 1) in slots, f"Di:1 sollte als (1,1) geparsed werden, got {slots}"
+
+    def test_import_teachers_wunsch_frei(self, tmp_path: Path):
+        """Wunsch-frei-Format 'Fr' wird korrekt in preferred_free_days geparsed."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lehrkräfte"
+        ws.append([
+            "Name (Nachname, Vorname)", "Kürzel", "Fächer (kommagetrennt)",
+            "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+            "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
+            "Sperrslots (Tag:Slot,...)", "Wunsch-frei (Tage)", "Max Springstd/Woche",
+        ])
+        ws.append([
+            "Müller, Hans", "TST", "Mathematik",
+            26, "nein", "", "", 6, 2,
+            "", "Fr Mo", "",
+        ])
+        path = tmp_path / "lk.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        teachers = importer.import_teachers()
+        assert len(teachers) == 1
+        days = teachers[0].preferred_free_days
+        assert 4 in days, f"Fr sollte als 4 geparsed werden, got {days}"
+        assert 0 in days, f"Mo sollte als 0 geparsed werden, got {days}"
+
+    def test_import_teachers_max_gaps_week(self, tmp_path: Path):
+        """Max Springstd/Woche wird pro Lehrer korrekt eingelesen."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lehrkräfte"
+        ws.append([
+            "Name (Nachname, Vorname)", "Kürzel", "Fächer (kommagetrennt)",
+            "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+            "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
+            "Sperrslots (Tag:Slot,...)", "Wunsch-frei (Tage)", "Max Springstd/Woche",
+        ])
+        ws.append([
+            "Müller, Hans", "TST", "Mathematik",
+            26, "nein", "", "", 6, 2,
+            "", "", 3,
+        ])
+        path = tmp_path / "lk.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        teachers = importer.import_teachers()
+        assert len(teachers) == 1
+        assert teachers[0].max_gaps_per_week == 3
+
 
 # ─── CSV IMPORT ───────────────────────────────────────────────────────────────
 
@@ -980,6 +1071,25 @@ class TestUntisImport:
   <classes>
     <class id="5a"><shortname>5a</shortname><name>5a</name><grade>5</grade></class>
   </classes>
+  <lessons>
+    <lesson id="1">
+      <teacher id="1"/>
+      <subject id="1"/>
+      <class id="5a"/>
+      <periods>
+        <period day="1" period="3"/>
+      </periods>
+    </lesson>
+    <lesson id="2">
+      <teacher id="2"/>
+      <subject id="2"/>
+      <class id="5a"/>
+      <periods>
+        <period day="2" period="1"/>
+        <period day="4" period="1"/>
+      </periods>
+    </lesson>
+  </lessons>
 </untis>"""
 
     def test_parse_subjects(self, tmp_path):
@@ -1028,6 +1138,77 @@ class TestUntisImport:
         assert len(teachers) == 2
         ids = [t.id for t in teachers]
         assert "MUE" in ids
+
+    def test_import_lessons_basic(self, tmp_path):
+        """2 Lektionen → 3 PinnedLesson-Objekte (Lektion 2 hat 2 Perioden)."""
+        from data.untis_import import UntisXmlImporter
+        xml_file = tmp_path / "test.xml"
+        xml_file.write_text(self._make_minimal_xml(), encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        teachers = importer.import_teachers()
+        classes = importer.import_classes({5: {"Deutsch": 4, "Mathematik": 4}})
+        subjects = importer.import_subjects()
+        pins = importer.import_lessons(teachers, classes, subjects)
+        # Lektion 1: 1 Periode; Lektion 2: 2 Perioden → 3 Pins
+        assert len(pins) == 3
+        days = [p.day for p in pins]
+        assert 0 in days   # Lektion 1: Untis day=1 → solver day=0
+        assert 1 in days   # Lektion 2: Untis day=2 → solver day=1
+
+    def test_import_lessons_multi_period(self, tmp_path):
+        """Lektion mit 2 Perioden erzeugt 2 PinnedLesson-Objekte."""
+        from data.untis_import import UntisXmlImporter
+        xml_file = tmp_path / "test.xml"
+        xml_file.write_text(self._make_minimal_xml(), encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        teachers = importer.import_teachers()
+        classes = importer.import_classes({5: {"Deutsch": 4, "Mathematik": 4}})
+        subjects = importer.import_subjects()
+        pins = importer.import_lessons(teachers, classes, subjects)
+        # Pins für Lektion 2 (Mathematik, SCH): day=1 slot=1 und day=3 slot=1
+        math_pins = [p for p in pins if p.subject == "Mathematik"]
+        assert len(math_pins) == 2
+        assert any(p.day == 1 and p.slot_number == 1 for p in math_pins)
+        assert any(p.day == 3 and p.slot_number == 1 for p in math_pins)
+
+    def test_import_lessons_unknown_ref_warns(self, tmp_path):
+        """Unbekannte Lehrer-Referenz erzeugt Warnung und Pin wird übersprungen."""
+        from data.untis_import import UntisXmlImporter
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<untis>
+  <subjects>
+    <subject id="1"><shortname>D</shortname><longname>Deutsch</longname></subject>
+  </subjects>
+  <teachers>
+    <teacher id="1"><shortname>MUE</shortname><subjects>Deutsch</subjects></teacher>
+  </teachers>
+  <classes>
+    <class id="5a"><shortname>5a</shortname><name>5a</name><grade>5</grade></class>
+  </classes>
+  <lessons>
+    <lesson id="99">
+      <teacher id="999"/>
+      <subject id="1"/>
+      <class id="5a"/>
+      <periods><period day="1" period="1"/></periods>
+    </lesson>
+  </lessons>
+</untis>"""
+        xml_file = tmp_path / "warn.xml"
+        xml_file.write_text(xml, encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        teachers = importer.import_teachers()
+        classes = importer.import_classes({5: {"Deutsch": 4}})
+        subjects = importer.import_subjects()
+        pins = importer.import_lessons(teachers, classes, subjects)
+        assert pins == [], f"Unbekannte Referenz sollte keine Pins erzeugen, got {pins}"
+        assert any("999" in w or "übersprungen" in w.lower()
+                   for w in importer._report.warnings), (
+            f"Erwartete Warnung für unbekannte Lehrer-Referenz: {importer._report.warnings}"
+        )
 
 
 class TestDataVersioning:

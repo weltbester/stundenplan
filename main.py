@@ -80,7 +80,7 @@ try:
             },
             {
                 "name": "Analyse",
-                "commands": ["quality", "substitute"],
+                "commands": ["quality", "substitute", "diff"],
             },
             {
                 "name": "Szenarien",
@@ -412,7 +412,10 @@ def cmd_template(output: str):
               help="Pfad für JSON-Export.")
 @click.option("--save-versioned", is_flag=True, default=False,
               help="Importierte Daten mit Zeitstempel im Dateinamen speichern.")
-def cmd_import(datei: Path, save_json: bool, json_path: str, save_versioned: bool):
+@click.option("--pins-output", default=str(DEFAULT_PINS_JSON),
+              help="Pfad für exportierte Lektions-Pins (nur bei Untis XML).")
+def cmd_import(datei: Path, save_json: bool, json_path: str,
+               save_versioned: bool, pins_output: str):
     """Importiert Schuldaten aus einer Excel-, CSV- oder Untis-XML-Datei."""
     mgr, config = _load_config_or_abort()
     from data.excel_import import (
@@ -433,6 +436,18 @@ def cmd_import(datei: Path, save_json: bool, json_path: str, save_versioned: boo
                 errors=untis_report.errors,
                 warnings=untis_report.warnings,
             )
+            # Pins aus Lektionen speichern
+            if untis_report.pinned_lessons:
+                from solver.pinning import PinManager
+                pm = PinManager()
+                for pin in untis_report.pinned_lessons:
+                    pm.add_pin(pin)
+                pins_path = Path(pins_output)
+                pm.save_json(pins_path)
+                console.print(
+                    f"[green]✓[/green] {len(untis_report.pinned_lessons)} Lektionen "
+                    f"als Pins gespeichert → {pins_path}"
+                )
         else:
             school_data, report = import_from_excel(datei, config)
     except ExcelImportError as e:
@@ -645,8 +660,9 @@ def _parse_weights(s: str) -> dict:
               help="Nur harte Constraints (keine Soft-Optimierung).")
 @click.option("--weights", default=None,
               help="Gewichte überschreiben, z.B. 'gaps=200,double_lessons=50'.")
-@click.option("--two-pass / --no-two-pass", default=False,
-              help="Zweiphasiger Solver: Phase A (Zuweisung) + Phase B (Scheduling).")
+@click.option("--two-pass / --no-two-pass", default=None,
+              help="Zweiphasiger Solver: Phase A (Zuweisung) + Phase B (Scheduling). "
+              "Standard: automatisch bei ≥ 20 Klassen.")
 @click.option("--incremental", is_flag=True, default=False,
               help="Inkrementeller Re-Solve: fixiert unveränderte Stunden aus vorheriger "
               "Lösung.")
@@ -1658,6 +1674,92 @@ def cmd_browse(json_path: str, solution_path: str):
         sys.exit(1)
 
 
+# ─── DIFF ─────────────────────────────────────────────────────────────────────
+
+@click.command("diff")
+@click.argument("file_a", type=click.Path(exists=True, path_type=Path))
+@click.argument("file_b", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Ausgabeformat: 'text' (Rich-Tabelle) oder 'json'.",
+)
+def cmd_diff(file_a: Path, file_b: Path, fmt: str):
+    """Vergleicht zwei SchoolData-JSON-Dateien und zeigt Unterschiede an.
+
+    Gibt Exit-Code 0 zurück wenn die Dateien identisch sind, 1 bei Unterschieden.
+    """
+    from models.school_data import SchoolData
+    from analysis.diff import diff_school_data
+
+    try:
+        data_a = SchoolData.load_json(file_a)
+        data_b = SchoolData.load_json(file_b)
+    except (FileNotFoundError, Exception) as e:
+        console.print(f"[red bold]Fehler beim Laden:[/red bold] {e}")
+        sys.exit(2)
+
+    diff = diff_school_data(data_a, data_b)
+
+    if fmt == "json":
+        console.print(diff.to_json())
+        sys.exit(0 if diff.is_empty() else 1)
+
+    # ── Text-Ausgabe (Rich) ───────────────────────────────────────────────────
+    if diff.is_empty():
+        console.print(
+            f"[green]✓ Keine Unterschiede zwischen[/green] "
+            f"[cyan]{file_a.name}[/cyan] und [cyan]{file_b.name}[/cyan]."
+        )
+        sys.exit(0)
+
+    console.print(
+        f"\n[bold]Diff:[/bold] [cyan]{file_a.name}[/cyan] → [cyan]{file_b.name}[/cyan]\n"
+    )
+
+    if diff.teachers_added or diff.teachers_removed:
+        t = Table(title="Lehrkräfte", box=box.SIMPLE, show_header=True)
+        t.add_column("Änderung", style="bold")
+        t.add_column("ID")
+        for tid in diff.teachers_added:
+            t.add_row("[green]+[/green]", tid)
+        for tid in diff.teachers_removed:
+            t.add_row("[red]−[/red]", tid)
+        console.print(t)
+
+    if diff.curriculum_changes:
+        t = Table(title="Curriculum-Änderungen", box=box.SIMPLE, show_header=True)
+        t.add_column("Klasse")
+        t.add_column("Fach")
+        t.add_column("Alt", justify="right")
+        t.add_column("Neu", justify="right")
+        for ch in diff.curriculum_changes:
+            arrow = "[green]+[/green]" if ch.new_hours > ch.old_hours else "[red]−[/red]"
+            t.add_row(
+                ch.class_id, ch.subject,
+                str(ch.old_hours), f"{arrow} {ch.new_hours}",
+            )
+        console.print(t)
+
+    if diff.coupling_changes:
+        t = Table(title="Kopplungen", box=box.SIMPLE, show_header=True)
+        t.add_column("Änderung")
+        for msg in diff.coupling_changes:
+            t.add_row(msg)
+        console.print(t)
+
+    if diff.config_changes:
+        t = Table(title="Konfiguration", box=box.SIMPLE, show_header=True)
+        t.add_column("Feld: alt → neu")
+        for msg in diff.config_changes:
+            t.add_row(msg)
+        console.print(t)
+
+    sys.exit(1)
+
+
 # ─── HAUPT-CLI ────────────────────────────────────────────────────────────────
 
 @click.group()
@@ -1701,6 +1803,7 @@ cli.add_command(cmd_run)
 cli.add_command(cmd_scenario)
 cli.add_command(cmd_quality)
 cli.add_command(cmd_substitute)
+cli.add_command(cmd_diff)
 cli.add_command(cmd_show)
 cli.add_command(cmd_browse)
 

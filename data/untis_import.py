@@ -27,6 +27,8 @@ class ImportReport(BaseModel):
     subjects_imported: int = 0
     classes_imported: int = 0
     rooms_imported: int = 0
+    lessons_imported: int = 0
+    pinned_lessons: list = []   # list[PinnedLesson] — vermeidet zirkulären Import
 
     def print_rich(self) -> None:
         from rich.console import Console
@@ -36,6 +38,8 @@ class ImportReport(BaseModel):
                  f"[green]Fächer: {self.subjects_imported}[/green]  "
                  f"[green]Klassen: {self.classes_imported}[/green]  "
                  f"[green]Räume: {self.rooms_imported}[/green]"]
+        if self.lessons_imported > 0:
+            lines[0] += f"  [green]Lektionen: {self.lessons_imported}[/green]"
         if self.warnings:
             lines.append("\n[yellow]Warnungen:[/yellow]")
             for w in self.warnings:
@@ -265,6 +269,132 @@ class UntisXmlImporter:
         self._report.rooms_imported = len(rooms)
         return rooms
 
+    def import_lessons(
+        self,
+        teachers: list[Teacher],
+        classes: list,
+        subjects: list[Subject],
+    ) -> list:
+        """Importiert Lektionen aus <lessons>/<lesson> → list[PinnedLesson].
+
+        Baut Reverse-Lookup-Dicts aus den bereits importierten Daten:
+        - teacher_by_id: Untis numeric id → teacher.id (Kürzel)
+        - subject_by_id: Untis numeric id → subject.name
+        - class_by_id:   Untis id → class.id
+
+        Day-Konvention: Untis day=1 (Mo) → solver day=0 (subtract 1).
+        Slot-Nummern: 1-basiert in Untis und Solver → unverändert übernehmen.
+        """
+        from solver.pinning import PinnedLesson
+
+        self._ensure_parsed()
+        section = self._find_section("lessons")
+        if section is None:
+            return []
+
+        # Reverse-Lookups bauen
+        teacher_by_id: dict[str, str] = {}
+        teachers_section = self._find_section("teachers")
+        for el in (teachers_section if teachers_section is not None else []):
+            untis_id = el.get("id", "")
+            shortname = self._text(el, "shortname")
+            if untis_id and shortname:
+                teacher_by_id[untis_id] = shortname.upper()
+
+        subject_by_id: dict[str, str] = {}
+        subjects_section = self._find_section("subjects")
+        for el in (subjects_section if subjects_section is not None else []):
+            untis_id = el.get("id", "")
+            longname = (
+                self._text(el, "longname")
+                or self._text(el, "name")
+                or self._text(el, "shortname")
+            )
+            if untis_id and longname:
+                subject_by_id[untis_id] = longname
+
+        # Klassen-IDs direkt aus class.id (Untis-ID = Klassen-ID in den meisten Exporten)
+        class_ids: set[str] = {c.id for c in classes}
+
+        # Bekannte Fächer und Lehrer für Validierung
+        known_subjects: set[str] = {s.name for s in subjects}
+        known_teachers: set[str] = {t.id for t in teachers}
+
+        pins: list[PinnedLesson] = []
+
+        for lesson_el in section:
+            lesson_id = lesson_el.get("id", "?")
+
+            # Lehrer auflösen
+            teacher_el = lesson_el.find("teacher")
+            if teacher_el is None:
+                self._report.warnings.append(
+                    f"Lektion {lesson_id}: Kein <teacher>-Element — übersprungen."
+                )
+                continue
+            teacher_ref = teacher_el.get("id", "")
+            teacher_id = teacher_by_id.get(teacher_ref, teacher_ref.upper())
+            if teacher_id not in known_teachers:
+                self._report.warnings.append(
+                    f"Lektion {lesson_id}: Lehrer-ID '{teacher_ref}' "
+                    f"(→ '{teacher_id}') nicht gefunden — übersprungen."
+                )
+                continue
+
+            # Fach auflösen
+            subject_el = lesson_el.find("subject")
+            if subject_el is None:
+                self._report.warnings.append(
+                    f"Lektion {lesson_id}: Kein <subject>-Element — übersprungen."
+                )
+                continue
+            subject_ref = subject_el.get("id", "")
+            subject_name = subject_by_id.get(subject_ref, subject_ref)
+            if subject_name not in known_subjects:
+                self._report.warnings.append(
+                    f"Lektion {lesson_id}: Fach '{subject_ref}' "
+                    f"(→ '{subject_name}') nicht in bekannten Fächern — übersprungen."
+                )
+                continue
+
+            # Klasse auflösen
+            class_el = lesson_el.find("class")
+            if class_el is None:
+                self._report.warnings.append(
+                    f"Lektion {lesson_id}: Kein <class>-Element — übersprungen."
+                )
+                continue
+            class_ref = class_el.get("id", "")
+            if class_ref not in class_ids:
+                self._report.warnings.append(
+                    f"Lektion {lesson_id}: Klasse '{class_ref}' nicht gefunden — übersprungen."
+                )
+                continue
+
+            # Perioden → PinnedLesson-Objekte
+            periods_el = lesson_el.find("periods")
+            if periods_el is None:
+                continue
+            for period_el in periods_el:
+                try:
+                    untis_day = int(period_el.get("day", "0"))
+                    slot = int(period_el.get("period", "0"))
+                except ValueError:
+                    continue
+                if untis_day < 1 or slot < 1:
+                    continue
+                pins.append(PinnedLesson(
+                    teacher_id=teacher_id,
+                    class_id=class_ref,
+                    subject=subject_name,
+                    day=untis_day - 1,   # Untis 1-basiert → solver 0-basiert
+                    slot_number=slot,
+                ))
+
+        self._report.lessons_imported = len(pins)
+        self._report.pinned_lessons = pins
+        return pins
+
     def import_all(
         self, stundentafel: Optional[dict] = None
     ) -> "tuple[SchoolData, ImportReport]":
@@ -289,6 +419,9 @@ class UntisXmlImporter:
                 )
                 for n, m in SUBJECT_METADATA.items()
             ]
+
+        # Lektionen importieren (optional — bei fehlender <lessons>-Sektion leer)
+        self.import_lessons(teachers, classes, subjects)
 
         school_data = SchoolData(
             subjects=subjects,

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """Stundenplan-Generator — Haupt-CLI.
 
 Verwendung:

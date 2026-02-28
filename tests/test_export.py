@@ -399,82 +399,10 @@ class TestBuildTimeGridRows:
 
 # ─── TUI-Renderer Tests ───────────────────────────────────────────────────────
 
-def make_mini_school_data_export():
-    """Mini-Datensatz für Export-Tests."""
-    from config.schema import TeacherConfig, SolverConfig
-    config = SchoolConfig(
-        school_name="Test",
-        school_type=SchoolType.GYMNASIUM,
-        bundesland="NRW",
-        time_grid=default_time_grid(),
-        grades=GradeConfig(grades=[
-            GradeDefinition(grade=5, num_classes=1, weekly_hours_target=30),
-        ]),
-        rooms=default_rooms(),
-        teachers=TeacherConfig(total_count=5, vollzeit_deputat=26,
-                               teilzeit_percentage=0.0, deputat_min_fraction=0.80),
-        solver=SolverConfig(time_limit_seconds=30, num_workers=2,
-                            weight_deputat_deviation=0),
-    )
-    sek1_max = config.time_grid.sek1_max_slot
-    subjects = [
-        Subject(name=n, short_name=m["short"], category=m["category"],
-                is_hauptfach=m["is_hauptfach"], requires_special_room=m.get("room"),
-                double_lesson_required=m.get("double_required", False),
-                double_lesson_preferred=m.get("double_preferred", False))
-        for n, m in SUBJECT_METADATA.items()
-    ]
-    rooms = []
-    for rd in config.rooms.special_rooms:
-        prefix = rd.room_type[:2].upper()
-        for i in range(1, rd.count + 1):
-            rooms.append(Room(id=f"{prefix}{i}", room_type=rd.room_type,
-                              name=f"{rd.display_name} {i}"))
-    classes = [SchoolClass(id="5a", grade=5, label="a",
-                           curriculum={s: h for s, h in
-                                       STUNDENTAFEL_GYMNASIUM_SEK1[5].items()
-                                       if h > 0},
-                           max_slot=sek1_max)]
-    dep_max, dep_min = 9, 4
-    teachers = [
-        Teacher(id="T01", name="Müller, Anna",
-                subjects=["Deutsch", "Geschichte"],
-                deputat_max=dep_max, deputat_min=dep_min),
-        Teacher(id="T02", name="Schmidt, Hans",
-                subjects=["Mathematik", "Physik"],
-                deputat_max=dep_max, deputat_min=dep_min),
-        Teacher(id="T03", name="Weber, Eva",
-                subjects=["Englisch", "Biologie"],
-                deputat_max=dep_max, deputat_min=dep_min),
-        Teacher(id="T04", name="Koch, Lisa",
-                subjects=["Kunst", "Musik", "Sport"],
-                deputat_max=dep_max, deputat_min=dep_min),
-        Teacher(id="T05", name="Wolf, Peter",
-                subjects=["Religion", "Ethik", "Chemie", "Erdkunde",
-                          "Latein", "Politik"],
-                deputat_max=dep_max, deputat_min=dep_min),
-    ]
-    couplings = [
-        Coupling(id="reli_5", coupling_type="reli_ethik",
-                 involved_class_ids=["5a"],
-                 groups=[CouplingGroup(group_name="ev", subject="Religion",
-                                      hours_per_week=2),
-                         CouplingGroup(group_name="ethik", subject="Ethik",
-                                       hours_per_week=2)],
-                 hours_per_week=2, cross_class=True),
-    ]
-    return SchoolData(subjects=subjects, rooms=rooms, classes=classes,
-                      teachers=teachers, couplings=couplings, config=config)
-
-
 @pytest.fixture(scope="module")
-def tui_solution():
-    data = make_mini_school_data_export()
-    solver = ScheduleSolver(data)
-    solution = solver.solve(use_soft=False)
-    if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
-        pytest.skip("Kein Solver-Ergebnis für TUI-Tests")
-    return solution, data
+def tui_solution(mini_solution: ScheduleSolution, mini_school_data: SchoolData):
+    """Reuses the module-level mini_solution to avoid a second solver run."""
+    return mini_solution, mini_school_data
 
 
 class TestTuiRenderer:

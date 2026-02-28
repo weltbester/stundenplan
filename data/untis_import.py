@@ -158,7 +158,7 @@ class UntisXmlImporter:
         used_ids: set = set()
         for el in section:
             id_ = (
-                self._text(el, "id") or self._text(el, "shortname", "")
+                self._text(el, "shortname") or self._text(el, "id", "")
             ).upper()
             name_raw = (
                 self._text(el, "surname")

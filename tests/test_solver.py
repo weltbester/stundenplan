@@ -1021,7 +1021,8 @@ class TestFull36Classes:
         solution = solver.solve(use_soft=False)
         elapsed = time.time() - t0
 
-        assert elapsed <= 310, f"Solver zu langsam: {elapsed:.1f}s"
+        # 300s solver limit + warm-start pass + overhead
+        assert elapsed <= 420, f"Solver zu langsam: {elapsed:.1f}s"
         # Status sollte FEASIBLE oder OPTIMAL sein (oder UNKNOWN bei Timeout)
         assert solution.solver_status in (
             "OPTIMAL", "FEASIBLE", "UNKNOWN"

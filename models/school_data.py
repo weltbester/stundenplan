@@ -1,7 +1,9 @@
 """SchoolData: Vollständiger Schuldatensatz + Machbarkeits-Check (Pydantic v2)."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -56,13 +58,16 @@ class SchoolData(BaseModel):
     teachers: list[Teacher]
     couplings: list[Coupling]
     config: SchoolConfig
+    created_at: Optional[datetime] = None
+    modified_at: Optional[datetime] = None
+    data_version: str = "1.0"
 
     # ─── Übersicht ───
 
     def summary(self) -> str:
         """Kurze Übersicht über den Datensatz."""
         total_need = sum(sum(c.curriculum.values()) for c in self.classes)
-        total_dep = sum(t.deputat for t in self.teachers)
+        total_dep = sum(t.deputat_max for t in self.teachers)
         num_teilzeit = sum(1 for t in self.teachers if t.is_teilzeit)
         lines = [
             f"Schule: {self.config.school_name}",
@@ -106,35 +111,46 @@ class SchoolData(BaseModel):
         subject_map = {s.name: s for s in self.subjects}
 
         # ── 5. Gesamtbilanz ──────────────────────────────────────────────
-        total_deputat = sum(t.deputat for t in self.teachers)
+        total_deputat_max = sum(t.deputat_max for t in self.teachers)
+        total_deputat_min = sum(t.deputat_min for t in self.teachers)
         total_need = sum(sum(c.curriculum.values()) for c in self.classes)
 
         if total_need == 0:
             warnings.append("Kein Curriculum definiert – Machbarkeit kann nicht geprüft werden.")
-        elif total_deputat < total_need:
+        elif total_deputat_max < total_need:
             errors.append(
-                f"Gesamtbilanz: Lehrerkapazität ({total_deputat}h) < Gesamtbedarf ({total_need}h). "
-                f"Fehlen mindestens {total_need - total_deputat}h. Mehr Lehrkräfte benötigt."
+                f"Gesamtbilanz: Lehrerkapazität ({total_deputat_max}h) < Gesamtbedarf ({total_need}h). "
+                f"Fehlen mindestens {total_need - total_deputat_max}h. Mehr Lehrkräfte benötigt."
             )
-        elif total_deputat < total_need * 1.05:
-            puffer = (total_deputat / total_need - 1) * 100
+        elif total_deputat_max < total_need * 1.05:
+            puffer = (total_deputat_max / total_need - 1) * 100
             warnings.append(
-                f"Gesamtbilanz sehr knapp: {total_deputat}h Kapazität bei {total_need}h Bedarf "
+                f"Gesamtbilanz sehr knapp: {total_deputat_max}h Kapazität bei {total_need}h Bedarf "
                 f"(nur {puffer:.1f}% Puffer – Stundenplan schwer zu erstellen)."
             )
 
-        # ── 3. Jeder Lehrer: verfügbare Slots ≥ Deputat ─────────────────
+        # Deputat-Untergrenze: Summe aller deputat_min ≤ Gesamtbedarf
+        # Sonst können nicht alle Lehrer ihre Mindest-Stunden erreichen → INFEASIBLE
+        if total_deputat_min > total_need:
+            errors.append(
+                f"Deputat-Untergrenze verletzt: Summe deputat_min ({total_deputat_min}h) "
+                f"> Gesamtbedarf ({total_need}h). "
+                f"deputat_min_fraction senken oder Lehrerzahl reduzieren."
+            )
+
+        # ── 3. Jeder Lehrer: verfügbare Slots ≥ deputat_min ─────────────────
+        # dep_max ist Obergrenze; Fehler nur wenn Minimum nicht erreichbar ist.
         for teacher in self.teachers:
             available = total_slots_per_week - len(teacher.unavailable_slots)
-            if available < teacher.deputat:
+            if available < teacher.deputat_min:
                 errors.append(
                     f"Lehrkraft {teacher.id} ({teacher.name}): Nur {available} verfügbare Slots "
-                    f"bei Deputat {teacher.deputat}h. Sperrzeiten reduzieren oder Deputat anpassen."
+                    f"bei Deputat-Min {teacher.deputat_min}h. Sperrzeiten reduzieren oder Deputat anpassen."
                 )
-            elif available - teacher.deputat < 2:
+            elif available < teacher.deputat_max:
                 warnings.append(
-                    f"Lehrkraft {teacher.id}: Sehr wenig Spielraum – "
-                    f"{available} Slots bei {teacher.deputat}h Deputat."
+                    f"Lehrkraft {teacher.id}: Deputat-Max ({teacher.deputat_max}h) > verfügbare Slots "
+                    f"({available}) – Solver weist max. {available}h zu."
                 )
 
         # Freitag-Cluster-Warnung
@@ -173,7 +189,7 @@ class SchoolData(BaseModel):
         subject_capacity: dict[str, int] = {}
         for teacher in self.teachers:
             for subj in teacher.subjects:
-                subject_capacity[subj] = subject_capacity.get(subj, 0) + teacher.deputat
+                subject_capacity[subj] = subject_capacity.get(subj, 0) + teacher.deputat_max
 
         for subj_name, need in subject_need.items():
             if subj_name in coupling_covered:
@@ -275,8 +291,21 @@ class SchoolData(BaseModel):
         """Speichert den kompletten Datensatz als JSON-Datei."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        updated = self.model_copy(update={
+            "modified_at": now,
+            "created_at": self.created_at or now,
+        })
         with open(path, "w", encoding="utf-8") as f:
-            f.write(self.model_dump_json(indent=2))
+            f.write(updated.model_dump_json(indent=2))
+
+    def save_versioned(self, base_path: Path) -> Path:
+        """Speichert mit Zeitstempel im Dateinamen."""
+        base_path = Path(base_path)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+        versioned = base_path.parent / f"{base_path.stem}_{ts}{base_path.suffix}"
+        self.save_json(versioned)
+        return versioned
 
     @classmethod
     def load_json(cls, path: Path) -> "SchoolData":

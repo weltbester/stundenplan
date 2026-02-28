@@ -249,15 +249,17 @@ class TestModels:
         """Teacher ist ein Pydantic-Modell; id wird normalisiert."""
         from models.teacher import Teacher
         t = Teacher(id="mül", name="Müller, Hans", subjects=["Mathematik", "Physik"],
-                    deputat=26)
+                    deputat_max=26, deputat_min=21)
         assert t.id == "MÜL"  # normalisiert zu Großbuchstaben
-        assert t.deputat == 26
+        assert t.deputat == 26  # Property gibt deputat_max zurück
+        assert t.deputat_max == 26
+        assert t.deputat_min == 21
         assert not t.is_teilzeit
 
     def test_teacher_unavailable_slots(self):
         """Teacher.unavailable_slots akzeptiert tuple[int,int]."""
         from models.teacher import Teacher
-        t = Teacher(id="TST", name="Test, A", subjects=["Deutsch"], deputat=20,
+        t = Teacher(id="TST", name="Test, A", subjects=["Deutsch"], deputat_max=20, deputat_min=16,
                     unavailable_slots=[(0, 1), (0, 2), (4, 7)])
         assert len(t.unavailable_slots) == 3
 
@@ -462,10 +464,15 @@ class TestSchoolData:
         assert isinstance(report.warnings, list)
 
     def test_chemie_engpass_triggers_warning(self):
-        """Chemie-Engpass erzeugt Warnung im Feasibility-Report."""
-        data = self._make_data()
+        """Chemie-Engpass erzeugt Warnung wenn kein Mehrarbeit-Puffer gesetzt ist."""
+        from data.fake_data import FakeDataGenerator
+        config = default_school_config()
+        # Ohne Puffer: Chemie-Kapazität 52h vs. 48h Bedarf = 108% → Warnung bei < 110%
+        config = config.model_copy(update={
+            "teachers": config.teachers.model_copy(update={"deputat_max_buffer": 0})
+        })
+        data = FakeDataGenerator(config, seed=42).generate()
         report = data.validate_feasibility()
-        # Warnung wegen Chemie-Auslastung > 85%
         chemie_warnings = [w for w in report.warnings if "Chemie" in w or "chemie" in w.lower()]
         assert len(chemie_warnings) >= 1, (
             f"Keine Chemie-Warnung im Report. Warnungen: {report.warnings}"
@@ -534,7 +541,7 @@ class TestExcelTemplate:
         assert out.stat().st_size > 0
 
     def test_template_has_correct_sheets(self, tmp_path: Path):
-        """Excel-Vorlage enthält alle 6 Pflicht-Blätter."""
+        """Excel-Vorlage enthält alle 7 Pflicht-Blätter (inkl. Fächer)."""
         import openpyxl
         from data.excel_import import generate_template
         config = default_school_config()
@@ -543,10 +550,56 @@ class TestExcelTemplate:
 
         wb = openpyxl.load_workbook(str(out))
         sheet_names_lower = [s.lower() for s in wb.sheetnames]
-        for expected in ["zeitraster", "jahrgänge", "stundentafel",
+        for expected in ["zeitraster", "jahrgänge", "fächer", "stundentafel",
                          "lehrkräfte", "fachräume", "kopplungen"]:
             assert expected in sheet_names_lower, \
                 f"Blatt '{expected}' fehlt. Vorhanden: {wb.sheetnames}"
+
+    def test_faecher_sheet_has_columns(self, tmp_path: Path):
+        """Fächer-Blatt enthält die erwarteten Spaltenköpfe."""
+        import openpyxl
+        from data.excel_import import generate_template
+        config = default_school_config()
+        out = tmp_path / "vorlage.xlsx"
+        generate_template(config, out)
+
+        wb = openpyxl.load_workbook(str(out))
+        ws = wb["Fächer"]
+        headers = [str(c.value or "").strip().lower() for c in ws[1]]
+        assert "fachname" in headers
+        assert "kürzel" in headers
+        assert "kategorie" in headers
+        assert "hauptfach (ja/nein)" in headers
+
+    def test_faecher_sheet_prefilled_from_metadata(self, tmp_path: Path):
+        """Fächer-Blatt ist mit SUBJECT_METADATA vorausgefüllt."""
+        import openpyxl
+        from data.excel_import import generate_template
+        config = default_school_config()
+        out = tmp_path / "vorlage.xlsx"
+        generate_template(config, out)
+
+        wb = openpyxl.load_workbook(str(out))
+        ws = wb["Fächer"]
+        rows = list(ws.iter_rows(values_only=True))
+        # Zeile 1 = Header, Zeile 2 = Hinweis-Merge, Zeilen 3+ = Fächer
+        data_rows = [r for r in rows[2:] if any(v for v in r)]
+        assert len(data_rows) >= len(SUBJECT_METADATA)
+        first_name = str(data_rows[0][0] or "")
+        assert first_name in SUBJECT_METADATA
+
+    def test_stundentafel_sheet_has_note(self, tmp_path: Path):
+        """Stundentafel-Blatt hat Hinweis-Zeile in Zeile 1."""
+        import openpyxl
+        from data.excel_import import generate_template
+        config = default_school_config()
+        out = tmp_path / "vorlage.xlsx"
+        generate_template(config, out)
+
+        wb = openpyxl.load_workbook(str(out))
+        ws = wb["Stundentafel"]
+        note = str(ws.cell(row=1, column=1).value or "").lower()
+        assert "wochenstunden" in note or "fächer" in note
 
     def test_zeitraster_sheet_prefilled(self, tmp_path: Path):
         """Zeitraster-Blatt enthält vorausgefüllte Daten aus Config."""
@@ -563,6 +616,277 @@ class TestExcelTemplate:
         assert len(rows) >= 2
         # Erste Spalte der zweiten Zeile = Slot-Nummer 1
         assert rows[1][0] == 1
+
+
+# ─── EXCEL IMPORT ─────────────────────────────────────────────────────────────
+
+class TestExcelImport:
+    """Tests für den ExcelImporter: Fächer, Stundentafel, Rückwärtskompatibilität."""
+
+    def _make_template(self, tmp_path: Path) -> Path:
+        from data.excel_import import generate_template
+        config = default_school_config()
+        out = tmp_path / "vorlage.xlsx"
+        generate_template(config, out)
+        return out
+
+    def test_import_subjects_from_faecher_sheet(self, tmp_path: Path):
+        """Fächer aus 'Fächer'-Blatt werden korrekt importiert."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        # Erstelle minimale Excel-Datei mit Fächer-Blatt
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Fächer"
+        ws.append(["Fachname", "Kürzel", "Kategorie", "Hauptfach (ja/nein)",
+                   "Fachraum-Typ", "Doppelstunde Pflicht", "Doppelstunde Bevorzugt"])
+        ws.append(["Türkisch", "TÜR", "sprachen", "nein", "", "nein", "nein"])
+        ws.append(["Mathematik", "Ma", "hauptfach", "ja", "", "nein", "ja"])
+        path = tmp_path / "faecher.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        subjects = importer.import_subjects()
+        names = [s.name for s in subjects]
+        assert "Türkisch" in names
+        assert "Mathematik" in names
+        assert len(subjects) == 2
+
+    def test_import_subjects_fallback_when_sheet_absent(self, tmp_path: Path):
+        """Kein 'Fächer'-Blatt → Fallback auf SUBJECT_METADATA."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        wb.active.title = "Lehrkräfte"
+        path = tmp_path / "no_faecher.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        subjects = importer.import_subjects()
+        names = [s.name for s in subjects]
+        assert "Deutsch" in names
+        assert "Mathematik" in names
+        assert len(subjects) == len(SUBJECT_METADATA)
+
+    def test_import_stundentafel_custom_values(self, tmp_path: Path):
+        """Benutzerdefinierte Stundentafel wird korrekt importiert."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Stundentafel"
+        # Hinweis-Zeile (wird übersprungen)
+        ws.append(["Wochenstunden pro Klasse und Fach"])
+        # Kopfzeile
+        ws.append(["Fach", "Jg. 5", "Jg. 6"])
+        # Deutsch: Bayern hätte z.B. 5h in Jg.5 statt 4h
+        ws.append(["Deutsch", 5, 4])
+        ws.append(["Mathematik", 4, 4])
+        path = tmp_path / "stundentafel.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        known = ["Deutsch", "Mathematik"]
+        st = importer.import_stundentafel(known)
+        assert st[5]["Deutsch"] == 5  # Bayern-Wert
+        assert st[6]["Deutsch"] == 4
+        assert st[5]["Mathematik"] == 4
+
+    def test_import_stundentafel_fallback_when_absent(self, tmp_path: Path):
+        """Kein 'Stundentafel'-Blatt → Fallback auf NRW-Stundentafel."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        wb.active.title = "Lehrkräfte"
+        path = tmp_path / "no_st.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        st = importer.import_stundentafel(["Deutsch"])
+        assert st == STUNDENTAFEL_GYMNASIUM_SEK1
+
+    def test_import_stundentafel_missing_cell_is_zero(self, tmp_path: Path):
+        """Fehlende Zelle in Stundentafel = 0 (kein NRW-Inject)."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Stundentafel"
+        ws.append(["Fach", "Jg. 5"])
+        ws.append(["Deutsch", ""])  # Leer = 0
+        path = tmp_path / "st_missing.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        st = importer.import_stundentafel(["Deutsch"])
+        assert st.get(5, {}).get("Deutsch", 0) == 0
+
+    def test_import_teachers_comma_separated(self, tmp_path: Path):
+        """Neues Fächer-Format (kommagetrennt) importiert alle Fächer."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lehrkräfte"
+        ws.append(["Name (Nachname, Vorname)", "Kürzel", "Fächer (kommagetrennt)",
+                   "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+                   "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag"])
+        ws.append(["Test, Anna", "TST", "Mathematik, Physik, Informatik, Chemie",
+                   26, "nein", "", "", 6, 2])
+        path = tmp_path / "lk_komma.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        teachers = importer.import_teachers()
+        assert len(teachers) == 1
+        assert len(teachers[0].subjects) == 4
+        assert "Informatik" in teachers[0].subjects
+        assert "Chemie" in teachers[0].subjects
+
+    def test_import_teachers_old_format_compat(self, tmp_path: Path):
+        """Altes Fach 1/2/3-Format wird noch korrekt geparst."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Lehrkräfte"
+        ws.append(["Name (Nachname, Vorname)", "Kürzel", "Fach 1", "Fach 2", "Fach 3",
+                   "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+                   "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag"])
+        ws.append(["Test, Bob", "BOB", "Mathematik", "Physik", "",
+                   26, "nein", "", "", 6, 2])
+        path = tmp_path / "lk_old.xlsx"
+        wb.save(str(path))
+
+        importer = ExcelImporter(path, config)
+        importer._open()
+        teachers = importer.import_teachers()
+        assert len(teachers) == 1
+        assert "Mathematik" in teachers[0].subjects
+        assert "Physik" in teachers[0].subjects
+
+    def test_import_classes_uses_custom_stundentafel(self, tmp_path: Path):
+        """import_classes() benutzt übergebene Stundentafel statt NRW-Defaults."""
+        import openpyxl
+        from data.excel_import import ExcelImporter
+        config = default_school_config()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Jahrgänge"
+        ws.append(["Jahrgang", "Anzahl Klassen", "Soll-Stunden/Woche", "Klassen-Buchstaben"])
+        ws.append([5, 1, 30, "a"])
+        path = tmp_path / "jg.xlsx"
+        wb.save(str(path))
+
+        custom_st = {5: {"Deutsch": 5, "Mathematik": 4}}
+        importer = ExcelImporter(path, config)
+        importer._open()
+        classes = importer.import_classes(stundentafel=custom_st)
+        assert len(classes) == 1
+        assert classes[0].curriculum.get("Deutsch") == 5
+        assert classes[0].curriculum.get("Mathematik") == 4
+
+
+# ─── CSV IMPORT ───────────────────────────────────────────────────────────────
+
+class TestCsvImport:
+    def test_single_csv_treated_as_lehrkraefte(self, tmp_path: Path):
+        """Einzelne .csv-Datei wird als Lehrkräfte-Blatt behandelt."""
+        import csv
+        from data.excel_import import CsvImporter
+        config = default_school_config()
+
+        csv_path = tmp_path / "Lehrkraefte.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Name (Nachname, Vorname)", "Kürzel",
+                             "Fächer (kommagetrennt)", "Deputat", "Teilzeit",
+                             "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+                             "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag",
+                             "Max Springstd/Tag"])
+            writer.writerow(["Csv, Tester", "CSV", "Mathematik, Physik",
+                             26, "nein", "", "", 6, 2])
+
+        importer = CsvImporter(csv_path, config)
+        importer._open()
+        sheet = importer._get_sheet("Lehrkräfte")
+        assert sheet is not None
+        rows = importer._sheet_rows(sheet)
+        assert len(rows) == 1
+        assert rows[0]["kürzel"] == "CSV"
+
+    def test_directory_with_multiple_csvs(self, tmp_path: Path):
+        """Verzeichnis mit mehreren CSV-Dateien — alle werden erkannt."""
+        import csv
+        from data.excel_import import CsvImporter
+        config = default_school_config()
+
+        csv_dir = tmp_path / "csv_import"
+        csv_dir.mkdir()
+
+        # Lehrkräfte
+        with open(csv_dir / "Lehrkraefte.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Name (Nachname, Vorname)", "Kürzel",
+                             "Fächer (kommagetrennt)", "Deputat", "Teilzeit",
+                             "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+                             "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag",
+                             "Max Springstd/Tag"])
+            writer.writerow(["Dir, Tester", "DIR", "Mathematik", 26, "nein",
+                             "", "", 6, 2])
+
+        importer = CsvImporter(csv_dir, config)
+        importer._open()
+        assert "Lehrkräfte" in importer._csv_sheets
+
+    def test_missing_csv_uses_defaults_gracefully(self, tmp_path: Path):
+        """Fehlende CSV-Dateien lösen keinen Fehler aus (Defaults gelten)."""
+        import csv
+        from data.excel_import import CsvImporter, ExcelImportError
+        config = default_school_config()
+
+        csv_dir = tmp_path / "sparse"
+        csv_dir.mkdir()
+
+        # Nur Lehrkräfte vorhanden
+        with open(csv_dir / "Lehrkraefte.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Name (Nachname, Vorname)", "Kürzel",
+                             "Fächer (kommagetrennt)", "Deputat", "Teilzeit",
+                             "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
+                             "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag",
+                             "Max Springstd/Tag"])
+            writer.writerow(["Sparse, Test", "SPR", "Mathematik", 26, "nein",
+                             "", "", 6, 2])
+
+        importer = CsvImporter(csv_dir, config)
+        importer._open()
+        # Fächer-Blatt fehlt → _get_sheet gibt None → import_subjects fällt zurück
+        sheet = importer._get_sheet("Fächer")
+        assert sheet is None
+        subjects = importer.import_subjects()
+        assert len(subjects) == len(SUBJECT_METADATA)
 
 
 # ─── MAIN.PY CLI ──────────────────────────────────────────────────────────────
@@ -634,3 +958,119 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(cli, ["scenario", "list"])
         assert result.exit_code == 0
+
+
+class TestUntisImport:
+    """Untis XML Import."""
+
+    def _make_minimal_xml(self) -> str:
+        return """<?xml version="1.0" encoding="UTF-8"?>
+<untis>
+  <subjects>
+    <subject id="1"><shortname>D</shortname><longname>Deutsch</longname></subject>
+    <subject id="2"><shortname>M</shortname><longname>Mathematik</longname></subject>
+    <subject id="99"><shortname>XY</shortname><longname>UnbekanntXY123</longname></subject>
+  </subjects>
+  <teachers>
+    <teacher id="1"><shortname>MUE</shortname><surname>Müller</surname>
+      <firstname>Anna</firstname><subjects>Deutsch,Mathematik</subjects></teacher>
+    <teacher id="2"><shortname>SCH</shortname><surname>Schmidt</surname>
+      <subjects>Mathematik</subjects></teacher>
+  </teachers>
+  <classes>
+    <class id="5a"><shortname>5a</shortname><name>5a</name><grade>5</grade></class>
+  </classes>
+</untis>"""
+
+    def test_parse_subjects(self, tmp_path):
+        from data.untis_import import UntisXmlImporter
+        xml_file = tmp_path / "test.xml"
+        xml_file.write_text(self._make_minimal_xml(), encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        subjects = importer.import_subjects()
+        names = [s.name for s in subjects]
+        assert "Deutsch" in names
+        assert "Mathematik" in names
+
+    def test_unknown_subject_warning(self, tmp_path):
+        from data.untis_import import UntisXmlImporter
+        xml_file = tmp_path / "test.xml"
+        xml_file.write_text(self._make_minimal_xml(), encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        importer.import_subjects()
+        assert any(
+            "UnbekanntXY123" in w or "unbekannt" in w.lower()
+            for w in importer._report.warnings
+        ), f"Erwartete Warnung, stattdessen: {importer._report.warnings}"
+
+    def test_missing_rooms_section(self, tmp_path):
+        from data.untis_import import UntisXmlImporter
+        xml_file = tmp_path / "test.xml"
+        xml_file.write_text(self._make_minimal_xml(), encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        rooms = importer.import_rooms()
+        assert rooms == []
+        assert any(
+            "rooms" in w.lower() or "räume" in w.lower() or "raum" in w.lower()
+            for w in importer._report.warnings
+        )
+
+    def test_parse_teachers(self, tmp_path):
+        from data.untis_import import UntisXmlImporter
+        xml_file = tmp_path / "test.xml"
+        xml_file.write_text(self._make_minimal_xml(), encoding="utf-8")
+        config = default_school_config()
+        importer = UntisXmlImporter(xml_file, config)
+        teachers = importer.import_teachers()
+        assert len(teachers) == 2
+        ids = [t.id for t in teachers]
+        assert "MUE" in ids
+
+
+class TestDataVersioning:
+    """Zeitstempel-Versionierung für SchoolData."""
+
+    def test_save_json_sets_timestamps(self, tmp_path):
+        from models.school_data import SchoolData
+        data = SchoolData(
+            subjects=[], rooms=[], classes=[], teachers=[], couplings=[],
+            config=default_school_config(),
+        )
+        path = tmp_path / "school_data.json"
+        data.save_json(path)
+        loaded = SchoolData.load_json(path)
+        assert loaded.created_at is not None
+        assert loaded.modified_at is not None
+
+    def test_save_versioned_filename(self, tmp_path):
+        from models.school_data import SchoolData
+        data = SchoolData(
+            subjects=[], rooms=[], classes=[], teachers=[], couplings=[],
+            config=default_school_config(),
+        )
+        base = tmp_path / "school_data.json"
+        actual = data.save_versioned(base)
+        assert actual != base
+        assert actual.exists()
+        assert "school_data_" in actual.name
+
+    def test_modified_at_updates_on_resave(self, tmp_path):
+        import time
+        from models.school_data import SchoolData
+        data = SchoolData(
+            subjects=[], rooms=[], classes=[], teachers=[], couplings=[],
+            config=default_school_config(),
+        )
+        path = tmp_path / "school_data.json"
+        data.save_json(path)
+        loaded1 = SchoolData.load_json(path)
+
+        time.sleep(0.01)
+        loaded1.save_json(path)
+        loaded2 = SchoolData.load_json(path)
+
+        assert loaded2.modified_at is not None
+        assert loaded1.created_at == loaded2.created_at

@@ -14,6 +14,7 @@ import time
 import logging
 from pathlib import Path
 from typing import Optional
+from datetime import datetime, timezone
 
 from pydantic import BaseModel
 from ortools.sat.python import cp_model
@@ -29,6 +30,10 @@ from solver.pinning import PinnedLesson
 logger = logging.getLogger(__name__)
 
 
+class RoomAssignmentError(Exception):
+    """Wird geworfen wenn die Raumzuweisung unlösbar ist."""
+
+
 # ─── Ergebnis-Modelle ─────────────────────────────────────────────────────────
 
 class ScheduleEntry(BaseModel):
@@ -39,7 +44,8 @@ class ScheduleEntry(BaseModel):
     teacher_id: str
     class_id: str
     subject: str
-    room: Optional[str] = None
+    room: Optional[str] = None       # Sonderraum-ID (z.B. "PH1"), None = Klassenraum
+    home_room: Optional[str] = None  # Klassenraum-ID (aus SchoolClass.home_room)
     is_coupling: bool = False
     coupling_id: Optional[str] = None
 
@@ -63,7 +69,10 @@ class ScheduleSolution(BaseModel):
     objective_value: Optional[float] = None
     num_variables: int
     num_constraints: int
+    phase1_time_seconds: float = 0.0
     config_snapshot: SchoolConfig
+    created_at: Optional[datetime] = None
+    schema_version: str = "1.0"
 
     def get_class_schedule(self, class_id: str) -> list[ScheduleEntry]:
         """Alle Einträge für eine bestimmte Klasse."""
@@ -77,8 +86,19 @@ class ScheduleSolution(BaseModel):
         """Speichert die Lösung als JSON-Datei."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        updated = self if self.created_at else self.model_copy(
+            update={"created_at": datetime.now(timezone.utc)}
+        )
         with open(path, "w", encoding="utf-8") as f:
-            f.write(self.model_dump_json(indent=2))
+            f.write(updated.model_dump_json(indent=2))
+
+    def save_versioned(self, base_path: Path) -> Path:
+        """Speichert mit Zeitstempel im Dateinamen."""
+        base_path = Path(base_path)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+        versioned = base_path.parent / f"{base_path.stem}_{ts}{base_path.suffix}"
+        self.save_json(versioned)
+        return versioned
 
     @classmethod
     def load_json(cls, path: Path) -> "ScheduleSolution":
@@ -143,6 +163,13 @@ class ScheduleSolver:
         self._coupling_slot: dict = {}    # (coupling_id, day, slot_nr) -> BoolVar
         self._coupling_assign: dict = {}  # (coupling_id, group_idx, teacher_id) -> BoolVar
 
+        # Doppelstunden-Variablen (Phase 3)
+        self._double: dict = {}  # (teacher_id, class_id, subject, day, block_start) -> BoolVar
+
+        # Schnell-Indizes für Soft-Constraints (vermeiden O(|slots|)-Scans)
+        self._sidx_teacher_day_slot: dict = {}  # (teacher_id, day, slot_nr) → [BoolVar]
+        self._sidx_tcsd: dict = {}              # (teacher_id, class_id, subj, day) → [BoolVar]
+
         # Subject-Metadaten-Cache
         self._subject_meta: dict = {}
         for name, meta in SUBJECT_METADATA.items():
@@ -151,12 +178,21 @@ class ScheduleSolver:
         # Kopplungs-bedeckte Fächer pro Klasse
         self._coupling_covered: dict[str, set[str]] = {}  # class_id -> set of subjects
 
+        # Springstunden-BoolVars (werden von _build_gap_vars befüllt, einmalig)
+        self._gap_vars: dict[tuple, list] = {}  # (teacher_id, day) → [is_gap BoolVar, ...]
+
         # Pins (werden von solve() gesetzt)
         self._pinned_lessons: list[PinnedLesson] = []
 
     # ─── Öffentliche API ──────────────────────────────────────────────────────
 
-    def solve(self, pins: list[PinnedLesson] = []) -> ScheduleSolution:
+    def solve(
+        self,
+        pins: list[PinnedLesson] = [],
+        use_soft: bool = True,
+        weights: Optional[dict] = None,
+        use_two_pass: bool = False,
+    ) -> ScheduleSolution:
         """Löst das Stundenplan-Problem und gibt eine Lösung zurück."""
         self._pinned_lessons = list(pins)
 
@@ -165,12 +201,62 @@ class ScheduleSolver:
         self._build_slot_index()
         self._build_coupling_coverage()
         self._create_variables()
+
+        phase1_time: float = 0.0
+        if use_two_pass:
+            phase1_limit = min(30, self.config.solver.time_limit_seconds // 10)
+            assignments, phase1_time = self._solve_phase1_assignments(phase1_limit)
+            if assignments:
+                for key, val in assignments.items():
+                    if key in self._assign:
+                        self._model.add(self._assign[key] == val)
+                logger.info(
+                    "Phase B (Scheduling): Zuweisungen fixiert, plane Slots..."
+                )
+
         self._add_constraints()
+
+        time_limit = self.config.solver.time_limit_seconds
+        num_workers = self.config.solver.num_workers or os.cpu_count() or 4
+
+        # Deputat-Auslastung: immer als Core-Objective (auch bei --no-soft)
+        # dep_min = Sicherheitsboden; Solver optimiert immer in Richtung dep_max.
+        dep_weight = self.data.config.solver.weight_deputat_deviation
+        core_dep_terms = self._soft_deputat_deviation_penalties(dep_weight) if dep_weight > 0 else []
+
+        # Warm-Start: immer wenn ein Objective aktiv ist (Deputat oder Soft-Constraints)
+        # Zuerst ohne Objective eine feasible Lösung finden, dann als Hint für Optimierung nutzen.
+        needs_warmstart = bool(core_dep_terms) or use_soft
+        if needs_warmstart:
+            pre_limit = min(90, time_limit // 3)
+            pre_solver = cp_model.CpSolver()
+            pre_solver.parameters.max_time_in_seconds = pre_limit
+            pre_solver.parameters.num_workers = num_workers
+            pre_solver.parameters.log_search_progress = False
+            pre_status = pre_solver.solve(self._model)
+            if pre_status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                logger.info(f"Warm-Start: feasible Lösung in {pre_solver.wall_time:.1f}s gefunden – setze Hints")
+                for var in self._slot.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._assign.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._double.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._coupling_slot.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+                for var in self._coupling_assign.values():
+                    self._model.add_hint(var, pre_solver.value(var))
+            else:
+                logger.warning("Warm-Start: keine feasible Lösung gefunden – Solve ohne Hints")
+
+        if use_soft:
+            self._add_soft_objective(weights, extra_terms=core_dep_terms)
+        elif core_dep_terms:
+            self._model.minimize(sum(core_dep_terms))
 
         # Solver konfigurieren
         cp_solver = cp_model.CpSolver()
-        cp_solver.parameters.max_time_in_seconds = self.config.solver.time_limit_seconds
-        num_workers = self.config.solver.num_workers or os.cpu_count() or 4
+        cp_solver.parameters.max_time_in_seconds = time_limit
         cp_solver.parameters.num_workers = num_workers
         cp_solver.parameters.log_search_progress = False
 
@@ -187,9 +273,15 @@ class ScheduleSolver:
         )
 
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            return self._extract_solution(cp_solver, elapsed, status_name)
+            solution = self._extract_solution(cp_solver, elapsed, status_name)
+            if use_two_pass and phase1_time > 0:
+                solution = solution.model_copy(
+                    update={"phase1_time_seconds": phase1_time}
+                )
+            return solution
         else:
-            self._diagnose_infeasible()
+            if status == cp_model.INFEASIBLE:
+                self._diagnose_infeasible()
             # Leere Lösung zurückgeben
             return ScheduleSolution(
                 entries=[],
@@ -200,6 +292,133 @@ class ScheduleSolver:
                 num_constraints=len(self._model.proto.constraints),
                 config_snapshot=self.config,
             )
+
+    # ─── Phase-1 Zuweisung (Two-Pass) ─────────────────────────────────────────
+
+    def _solve_phase1_assignments(
+        self, phase1_time: int
+    ) -> "tuple[dict, float]":
+        """Löst nur Lehrer-Zuweisung (assign + deputat) — ohne Slot-Planung.
+
+        Erstellt ein separates CpModel mit C2 + C7, löst es und gibt die
+        Assignment-Belegung zurück.
+        """
+        t0 = time.time()
+        model = cp_model.CpModel()
+        tg = self.config.time_grid
+
+        teachers_by_subject: dict[str, list] = {}
+        for teacher in self.data.teachers:
+            for subj in teacher.subjects:
+                teachers_by_subject.setdefault(subj, []).append(teacher)
+
+        assign: dict = {}
+        for cls in self.data.classes:
+            coupled = self._coupling_covered.get(cls.id, set())
+            for subject, hours in cls.curriculum.items():
+                if hours == 0 or subject in coupled:
+                    continue
+                qualified = teachers_by_subject.get(subject, [])
+                for teacher in qualified:
+                    key = (teacher.id, cls.id, subject)
+                    assign[key] = model.new_bool_var(
+                        f"p1assign_{teacher.id}_{cls.id}_{subject}"
+                    )
+
+        # C2: exactly one teacher per (class, subject)
+        by_cs: dict[tuple, list] = {}
+        for (t, c, s), var in assign.items():
+            by_cs.setdefault((c, s), []).append(var)
+        for vars_ in by_cs.values():
+            model.add_exactly_one(vars_)
+
+        # C7: deputat bounds per teacher
+        for teacher in self.data.teachers:
+            teacher_vars = [
+                var for (t, c, s), var in assign.items() if t == teacher.id
+            ]
+            if not teacher_vars:
+                continue
+            # Weight by curriculum hours
+            weighted_terms = []
+            for (t, c, s), var in assign.items():
+                if t != teacher.id:
+                    continue
+                for cls in self.data.classes:
+                    if cls.id == c:
+                        h = cls.curriculum.get(s, 0)
+                        weighted_terms.append(h * var)
+                        break
+            if weighted_terms:
+                model.add(sum(weighted_terms) <= teacher.deputat_max)
+                model.add(sum(weighted_terms) >= teacher.deputat_min)
+
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = phase1_time
+        solver.parameters.num_workers = (
+            self.config.solver.num_workers or os.cpu_count() or 4
+        )
+        solver.parameters.log_search_progress = False
+        status = solver.solve(model)
+        elapsed = time.time() - t0
+
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            result = {key: solver.value(var) for key, var in assign.items()}
+            n = sum(1 for v in result.values() if v == 1)
+            logger.info(
+                f"Phase A (Zuweisung): {elapsed:.1f}s — {n} Zuweisungen fixiert."
+            )
+            return result, elapsed
+        else:
+            logger.warning(
+                f"Phase A (Zuweisung): Keine Lösung gefunden ({elapsed:.1f}s) "
+                "— vollständiger Solve ohne Fixierung."
+            )
+            return {}, 0.0
+
+    # ─── Inkrementeller Re-Solve ───────────────────────────────────────────────
+
+    @staticmethod
+    def _identify_affected_teachers(
+        old_solution: "ScheduleSolution",
+        new_data: "SchoolData",
+    ) -> set:
+        """Findet Lehrer deren gespeicherte Stunden mit neuen Constraints kollidieren.
+
+        Ein Lehrer gilt als 'betroffen' wenn:
+        - Er in der alten Lösung Stunden hat, die jetzt gesperrt sind
+        - Er mehr Tagesstunden hat als sein neues max_hours_per_day erlaubt
+        - Er nicht mehr in new_data vorhanden ist
+        """
+        affected: set = set()
+        teacher_map = {t.id: t for t in new_data.teachers}
+
+        teacher_entries: dict = {}
+        for entry in old_solution.entries:
+            teacher_entries.setdefault(entry.teacher_id, []).append(entry)
+
+        for teacher_id, entries in teacher_entries.items():
+            teacher = teacher_map.get(teacher_id)
+            if teacher is None:
+                affected.add(teacher_id)
+                continue
+
+            blocked = set(teacher.unavailable_slots)
+            for entry in entries:
+                if (entry.day, entry.slot_number) in blocked:
+                    affected.add(teacher_id)
+                    break
+
+            by_day: dict = {}
+            for entry in entries:
+                by_day.setdefault(entry.day, []).append(entry.slot_number)
+            for day, slots in by_day.items():
+                unique_slots = set(slots)
+                if len(unique_slots) > teacher.max_hours_per_day:
+                    affected.add(teacher_id)
+                    break
+
+        return affected
 
     # ─── Slot-Index-Aufbau ────────────────────────────────────────────────────
 
@@ -244,6 +463,7 @@ class ScheduleSolver:
         """Erstellt alle Entscheidungsvariablen."""
         self._create_assign_and_slot_vars()
         self._create_coupling_vars()
+        self._create_double_vars()
 
     def _create_assign_and_slot_vars(self) -> None:
         """Ebene 1 (assign) und Ebene 2 (slot) Variablen."""
@@ -282,6 +502,11 @@ class ScheduleSolver:
                                 f"slot_{teacher.id}_{cls.id}_{subject}_{day}_{slot.slot_number}"
                             )
                             self._slot[skey] = svar
+                            # Schnell-Indizes befüllen
+                            tds_key = (teacher.id, day, slot.slot_number)
+                            self._sidx_teacher_day_slot.setdefault(tds_key, []).append(svar)
+                            tcsd_key = (teacher.id, cls.id, subject, day)
+                            self._sidx_tcsd.setdefault(tcsd_key, []).append(svar)
 
     def _create_coupling_vars(self) -> None:
         """Variablen für Kopplungen."""
@@ -313,6 +538,37 @@ class ScheduleSolver:
                     )
                     self._coupling_assign[key] = var
 
+    def _create_double_vars(self) -> None:
+        """Erzeugt double[t,c,s,day,bs]-Variablen für alle Doppelstunden-Fächer.
+
+        Wird für double_required UND double_preferred Fächer erstellt.
+        Nur wenn BEIDE Slot-Variablen (bs und bs+1) existieren.
+        """
+        tg = self.config.time_grid
+        double_subjects = {
+            n for n, m in SUBJECT_METADATA.items()
+            if m.get("double_required") or m.get("double_preferred")
+        }
+
+        # double_pairs: slot_first -> slot_second
+        double_pairs: dict[int, int] = {}
+        for db in tg.double_blocks:
+            if db.slot_second <= tg.sek1_max_slot:
+                double_pairs[db.slot_first] = db.slot_second
+
+        for (t, c, s) in self._assign:
+            if s not in double_subjects:
+                continue
+            for day in range(tg.days_per_week):
+                for bs in self.valid_double_starts:
+                    h_next = double_pairs.get(bs)
+                    if h_next is None:
+                        continue
+                    if (t, c, s, day, bs) in self._slot and (t, c, s, day, h_next) in self._slot:
+                        self._double[(t, c, s, day, bs)] = self._model.new_bool_var(
+                            f"double_{t}_{c}_{s}_{day}_{bs}"
+                        )
+
     # ─── Constraints ──────────────────────────────────────────────────────────
 
     def _add_constraints(self) -> None:
@@ -326,10 +582,14 @@ class ScheduleSolver:
         self._c7_deputat_bounds()
         self._c8_special_room_capacity()
         self._c9_double_lesson_required()
+        self._c9b_double_linkage()
         self._c10_compact_class_schedule()
         self._c11_max_hours_per_day()
         self._c12_coupling_constraints()
         self._c13_pin_constraints()
+        self._gap_vars = self._build_gap_vars()   # einmalig, für C14 + Soft
+        self._c14_gap_limit()
+        self._c14b_per_teacher_daily_gap_limit()
 
     def _c1_slot_implies_assign(self) -> None:
         """slot[t,c,s,d,h] <= assign[t,c,s]"""
@@ -470,44 +730,36 @@ class ScheduleSolver:
                                 pass
 
     def _c7_deputat_bounds(self) -> None:
-        """Deputat ±Toleranz."""
-        tol = self.config.teachers.deputat_tolerance
-
+        """Per-Lehrer asymmetrische Deputat-Schranken (deputat_min ≤ actual ≤ deputat_max)."""
         for teacher in self.data.teachers:
             # Alle Slot-Variablen dieses Lehrers
             slot_vars = [
                 var for key, var in self._slot.items()
                 if key[0] == teacher.id
             ]
-            # Kopplungs-Stunden: coupling_assign * hours_per_week
-            # Vereinfachung: coupling_assign bedeutet 'hours_per_week' Stunden pro Woche
-            # Aber da coupling_slot pro Slot gezählt wird, zählen wir anders:
-            # Die Gesamtstunden eines Lehrers in Kopplungen = sum über alle Kopplungen
-            # wo er einer Gruppe zugewiesen ist: coupling.hours_per_week
-
-            # coupling_assigned[k, g, t] = 1 bedeutet: Lehrer unterrichtet die Gruppe
-            # mit group.hours_per_week Stunden
 
             coupling_terms = []
             for coupling in self.data.couplings:
                 for g_idx, group in enumerate(coupling.groups):
                     ca_key = (coupling.id, g_idx, teacher.id)
                     if ca_key in self._coupling_assign:
-                        # Skalierte Variable: hours × bool
                         h = group.hours_per_week
                         if h > 0:
                             coupling_terms.append(
                                 self._coupling_assign[ca_key] * h
                             )
 
-            total_hours = sum(slot_vars) + sum(coupling_terms) if (slot_vars or coupling_terms) else self._model.new_constant(0)
-
             if slot_vars or coupling_terms:
-                self._model.add(sum(slot_vars) + sum(coupling_terms) >= teacher.deputat - tol)
-                self._model.add(sum(slot_vars) + sum(coupling_terms) <= teacher.deputat + tol)
+                total = sum(slot_vars) + sum(coupling_terms)
+                self._model.add(total >= teacher.deputat_min)
+                self._model.add(total <= teacher.deputat_max)
 
     def _c8_special_room_capacity(self) -> None:
-        """Fachraum-Kapazität: Nicht mehr Stunden als Räume vorhanden."""
+        """Fachraum-Kapazität: Nicht mehr Stunden als Räume vorhanden.
+
+        Berücksichtigt sowohl reguläre Slot-Variablen als auch Kopplungs-Slots,
+        da z. B. WPF-Informatik ebenfalls Informatik-Räume belegt.
+        """
         tg = self.config.time_grid
 
         # Für jede Raum-Typ und jeden Slot: max room_count simultane Nutzungen
@@ -515,6 +767,17 @@ class ScheduleSolver:
         for name, meta in SUBJECT_METADATA.items():
             if meta.get("room"):
                 room_type_for_subject[name] = meta["room"]
+
+        # Vorberechnen: welche Kopplungen welche Raumtypen pro Gruppe brauchen
+        coupling_room_types: dict[str, list[str]] = {}  # coupling_id → [rtype, ...]
+        for coupling in self.data.couplings:
+            rtypes = []
+            for group in coupling.groups:
+                rtype = room_type_for_subject.get(group.subject)
+                if rtype:
+                    rtypes.append(rtype)
+            if rtypes:
+                coupling_room_types[coupling.id] = rtypes
 
         for day in range(tg.days_per_week):
             for slot in self.sek1_slots:
@@ -527,6 +790,18 @@ class ScheduleSolver:
                         if rtype:
                             by_room_type.setdefault(rtype, []).append(var)
 
+                # Kopplungs-Slots: eine coupling_slot-Variable belegt je eine Raumeinheit
+                for coupling in self.data.couplings:
+                    rtypes = coupling_room_types.get(coupling.id)
+                    if not rtypes:
+                        continue
+                    cs_key = (coupling.id, day, h)
+                    cs_var = self._coupling_slot.get(cs_key)
+                    if cs_var is None:
+                        continue
+                    for rtype in rtypes:
+                        by_room_type.setdefault(rtype, []).append(cs_var)
+
                 for rtype, vars_ in by_room_type.items():
                     capacity = self.config.rooms.get_capacity(rtype)
                     if capacity < 999:  # Begrenzte Kapazität
@@ -535,10 +810,14 @@ class ScheduleSolver:
     def _c9_double_lesson_required(self) -> None:
         """Fächer mit double_required=True dürfen nur in gültigen Doppelstunden-Blöcken stattfinden.
 
-        Korrekte Semantik:
-          - Slot h ∈ valid_double_starts (1,3,5): darf aktiv sein; aktiviert zwingend h+1
-          - Slot h+1 (zweite Hälfte, 2,4,6): darf NUR aktiv sein wenn h aktiv ist
-          - Alle anderen Slots (z.B. 7): immer 0
+        Semantik je nach N (Stunden/Woche):
+          N=1: Einzelstunde erlaubt (Warnung), keine Doppelstunden-Pflicht
+          N=2: exakt 1 Doppelstunde; Slot-7 und andere Single-Slots verboten
+          N=3: 1 Doppelstunde + 1 Einzelstunde an ANDEREM Tag als die Doppelstunde
+          N=4: exakt 2 Doppelstunden; Slot-7 verboten
+          N=5: 2 Doppelstunden + 1 Einzelstunde an anderem Tag
+
+        Immer: Bidirektionale Implication für double-Paare (bs ↔ bs+1).
         """
         tg = self.config.time_grid
 
@@ -555,9 +834,22 @@ class ScheduleSolver:
                 double_pairs[db.slot_first] = db.slot_second
                 double_seconds.add(db.slot_second)
 
+        # Slot-Nummern die weder double_start noch double_second sind (z.B. Slot 7)
+        all_slot_numbers = {s.slot_number for s in self.sek1_slots}
+        single_only_slots = all_slot_numbers - set(double_pairs.keys()) - double_seconds
+
+        # Curriculum-Lookup: (class_id, subject) -> hours
+        curriculum: dict[tuple, int] = {}
+        for cls in self.data.classes:
+            for subj, hrs in cls.curriculum.items():
+                curriculum[(cls.id, subj)] = hrs
+
         for (t, c, s, day, h), var in self._slot.items():
             if s not in double_required_subjects:
                 continue
+
+            n = curriculum.get((c, s), 0)
+            n_rest = n % 2  # 0 = gerade; 1 = ungerade
 
             if h in self.valid_double_starts:
                 # Erste Hälfte: wenn aktiv, muss zweite Hälfte auch aktiv sein
@@ -572,11 +864,57 @@ class ScheduleSolver:
                         self._model.add(var == 0)
             elif h in double_seconds:
                 # Zweite Hälfte: wird durch Implication von der ersten Hälfte gesteuert.
-                # Kein separates Verbot nötig – die Paar-Implication oben reicht.
                 pass
             else:
-                # Kein gültiger Doppelstunden-Slot (z.B. Slot 7) → immer 0
-                self._model.add(var == 0)
+                # Single-only-Slot (z.B. Slot 7)
+                if n_rest == 0:
+                    # Gerade Stundenzahl: kein Einzelslot benötigt
+                    self._model.add(var == 0)
+                elif n <= 1:
+                    # N=1: nur Einzelstunde möglich, erlaubt
+                    pass
+                else:
+                    # N_rest=1 und N>=3: Einzelstunde erlaubt, aber nicht am selben Tag
+                    # wie eine Doppelstunde dieses Fachs
+                    for bs in self.valid_double_starts:
+                        bs_key = (t, c, s, day, bs)
+                        if bs_key in self._slot:
+                            # slot[bs] + slot[h] <= 1 (am selben Tag)
+                            self._model.add(self._slot[bs_key] + var <= 1)
+
+    def _c9b_double_linkage(self) -> None:
+        """Verknüpft double[]-Variablen bidirektional mit den slot[]-Paaren.
+
+        Für alle double-Fächer (required + preferred):
+          double[t,c,s,d,bs] = 1 ↔ slot[t,c,s,d,bs]=1 AND slot[t,c,s,d,bs+1]=1
+
+        Implementiert durch drei Implications:
+          1. double → slot_bs
+          2. double → slot_bs+1
+          3. slot_bs + slot_bs+1 - 1 ≤ double
+        """
+        tg = self.config.time_grid
+
+        double_pairs: dict[int, int] = {}
+        for db in tg.double_blocks:
+            if db.slot_second <= tg.sek1_max_slot:
+                double_pairs[db.slot_first] = db.slot_second
+
+        for (t, c, s, day, bs), dvar in self._double.items():
+            h_next = double_pairs.get(bs)
+            if h_next is None:
+                continue
+            slot_bs = self._slot.get((t, c, s, day, bs))
+            slot_bs_next = self._slot.get((t, c, s, day, h_next))
+            if slot_bs is None or slot_bs_next is None:
+                continue
+
+            # double → slot_bs
+            self._model.add_implication(dvar, slot_bs)
+            # double → slot_bs+1
+            self._model.add_implication(dvar, slot_bs_next)
+            # slot_bs + slot_bs+1 - 1 ≤ double  (i.e. both active → double)
+            self._model.add(slot_bs + slot_bs_next - 1 <= dvar)
 
     def _c10_compact_class_schedule(self) -> None:
         """Keine Lücken im Stundenplan einer Klasse (Stunden sind kompakt)."""
@@ -791,6 +1129,7 @@ class ScheduleSolver:
                                 teacher_id=assigned_teacher,
                                 class_id=class_id,
                                 subject=group.subject,
+                                room=room_type_for_subject.get(group.subject),
                                 is_coupling=True,
                                 coupling_id=coupling.id,
                             ))
@@ -800,6 +1139,22 @@ class ScheduleSolver:
             obj_val = float(cp_solver.objective_value)
         except Exception:
             pass
+
+        entries = self._assign_rooms(entries)
+
+        # Home-Room: Klassenraum-ID für alle Entries aus SchoolClass.home_room übernehmen
+        class_home_rooms = {
+            cls.id: cls.home_room
+            for cls in self.data.classes
+            if cls.home_room
+        }
+        if class_home_rooms:
+            entries = [
+                entry.model_copy(update={"home_room": class_home_rooms[entry.class_id]})
+                if entry.class_id in class_home_rooms
+                else entry
+                for entry in entries
+            ]
 
         return ScheduleSolution(
             entries=entries,
@@ -813,6 +1168,197 @@ class ScheduleSolver:
             config_snapshot=self.config,
         )
 
+    def _assign_rooms(self, entries: list[ScheduleEntry]) -> list[ScheduleEntry]:
+        """Ersetzt room_type-Strings durch konkrete Raum-IDs (Post-Processing).
+
+        Strategie:
+        1. Greedy (schnell, 99% der Fälle korrekt).
+        2. Wenn Greedy Fallbacks (-?) produziert: CP-SAT zweiter Pass.
+        3. Wenn CP-SAT scheitert: RoomAssignmentError mit Diagnose.
+        """
+        result = self._assign_rooms_greedy(entries)
+        q_count = sum(1 for e in result if e.room and e.room.endswith("-?"))
+        if q_count == 0:
+            return result
+        logger.warning(
+            f"Greedy-Raumzuweisung: {q_count} Fallbacks (-?). "
+            "Starte CP-SAT zweiten Pass..."
+        )
+        return self._assign_rooms_cp(entries)
+
+    def _assign_rooms_greedy(
+        self, entries: list[ScheduleEntry]
+    ) -> list[ScheduleEntry]:
+        """Greedy-Raumzuweisung: gleichmäßige Auslastung, kein Backtracking."""
+        room_ids: dict[str, list[str]] = {}
+        for room in self.data.rooms:
+            room_ids.setdefault(room.room_type, []).append(room.id)
+        for ids in room_ids.values():
+            ids.sort()
+
+        total_usage: dict[str, int] = {room.id: 0 for room in self.data.rooms}
+        slot_used: dict[tuple, set[str]] = {}
+        coupling_cache: dict[tuple, str] = {}
+
+        def _pick(rtype: str, day: int, slot: int) -> str:
+            ids = room_ids.get(rtype, [])
+            key = (day, slot, rtype)
+            used = slot_used.setdefault(key, set())
+            available = [r for r in ids if r not in used]
+            if not available:
+                return f"{rtype}-?"
+            room_id = min(available, key=lambda r: total_usage[r])
+            total_usage[room_id] += 1
+            used.add(room_id)
+            return room_id
+
+        result = []
+        for entry in entries:
+            if entry.room is not None:
+                rtype = entry.room
+                if entry.is_coupling and entry.coupling_id:
+                    cache_key = (
+                        entry.coupling_id, entry.teacher_id,
+                        entry.day, entry.slot_number,
+                    )
+                    if cache_key not in coupling_cache:
+                        coupling_cache[cache_key] = _pick(
+                            rtype, entry.day, entry.slot_number
+                        )
+                    room_id = coupling_cache[cache_key]
+                else:
+                    room_id = _pick(rtype, entry.day, entry.slot_number)
+                entry = entry.model_copy(update={"room": room_id})
+            result.append(entry)
+        return result
+
+    def _assign_rooms_cp(
+        self, entries: list[ScheduleEntry]
+    ) -> list[ScheduleEntry]:
+        """CP-SAT zweiter Pass: garantiert korrekte Raumzuweisung ohne Fallbacks.
+
+        Wirft RoomAssignmentError wenn keine Lösung existiert.
+        """
+        room_ids: dict[str, list[str]] = {}
+        for room in self.data.rooms:
+            room_ids.setdefault(room.room_type, []).append(room.id)
+        for ids in room_ids.values():
+            ids.sort()
+
+        # Nur Einträge mit Fachraum-Bedarf berücksichtigen
+        needs_room = [
+            (idx, e) for idx, e in enumerate(entries)
+            if e.room is not None
+        ]
+        if not needs_room:
+            return entries
+
+        model = cp_model.CpModel()
+
+        # Variablen: assigned[(entry_idx, room_id)] ∈ {0,1}
+        assigned: dict[tuple[int, str], cp_model.IntVar] = {}
+        for idx, entry in needs_room:
+            rtype = entry.room
+            for room_id in room_ids.get(rtype, []):
+                assigned[(idx, room_id)] = model.new_bool_var(
+                    f"room_{idx}_{room_id}"
+                )
+
+        # C1: Jeder Eintrag bekommt genau einen Raum
+        for idx, entry in needs_room:
+            rtype = entry.room
+            available_vars = [
+                assigned[(idx, room_id)]
+                for room_id in room_ids.get(rtype, [])
+            ]
+            if not available_vars:
+                raise RoomAssignmentError(
+                    f"Kein Raum vom Typ '{rtype}' konfiguriert. "
+                    "Bitte Raumkonfiguration prüfen."
+                )
+            model.add_exactly_one(available_vars)
+
+        # C2: Pro (day, slot, room_id) höchstens eine Belegung
+        from collections import defaultdict
+        slot_room_vars: dict[tuple, list] = defaultdict(list)
+        for idx, entry in needs_room:
+            rtype = entry.room
+            for room_id in room_ids.get(rtype, []):
+                key = (entry.day, entry.slot_number, room_id)
+                slot_room_vars[key].append(assigned[(idx, room_id)])
+
+        for key, var_list in slot_room_vars.items():
+            if len(var_list) > 1:
+                model.add_at_most_one(var_list)
+
+        # C3: Kopplungs-Einträge desselben Termins → gleicher Raum
+        coupling_groups: dict[tuple, list[tuple[int, str]]] = defaultdict(list)
+        for idx, entry in needs_room:
+            if entry.is_coupling and entry.coupling_id:
+                ck = (entry.coupling_id, entry.teacher_id,
+                      entry.day, entry.slot_number)
+                coupling_groups[ck].append((idx, entry.room))
+
+        for ck, group in coupling_groups.items():
+            if len(group) < 2:
+                continue
+            rtype = group[0][1]
+            for room_id in room_ids.get(rtype, []):
+                vars_in_group = [
+                    assigned.get((idx, room_id))
+                    for idx, _ in group
+                    if (idx, room_id) in assigned
+                ]
+                if len(vars_in_group) < 2:
+                    continue
+                # All-or-nothing: entweder alle oder keiner bekommt diesen Raum
+                for v1, v2 in zip(vars_in_group[:-1], vars_in_group[1:]):
+                    model.add(v1 == v2)
+
+        # Lösen
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = 30
+        status = solver.solve(model)
+        status_name = solver.status_name(status)
+
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            # Diagnose: welcher Raumtyp ist überlastet?
+            rtype_demand: dict[str, dict[tuple, int]] = defaultdict(
+                lambda: defaultdict(int)
+            )
+            for _, entry in needs_room:
+                rtype_demand[entry.room][(entry.day, entry.slot_number)] += 1
+
+            bottlenecks = []
+            for rtype, slot_counts in rtype_demand.items():
+                capacity = len(room_ids.get(rtype, []))
+                for (day, slot), demand in slot_counts.items():
+                    if demand > capacity:
+                        day_names = ["Mo", "Di", "Mi", "Do", "Fr"]
+                        dn = day_names[day] if day < 5 else str(day)
+                        bottlenecks.append(
+                            f"'{rtype}' an {dn} Slot {slot}: "
+                            f"{demand} Nachfrage vs. {capacity} Räume"
+                        )
+
+            diag = "; ".join(bottlenecks) if bottlenecks else status_name
+            raise RoomAssignmentError(
+                f"Fachraum-Engpass: {diag}. "
+                "Erhöhen Sie die Raumanzahl in der Konfiguration."
+            )
+
+        # Ergebnis zurückschreiben
+        idx_to_room: dict[int, str] = {}
+        for (idx, room_id), var in assigned.items():
+            if solver.value(var) == 1:
+                idx_to_room[idx] = room_id
+
+        result = list(entries)
+        for idx, entry in needs_room:
+            room_id = idx_to_room.get(idx, f"{entry.room}-?")
+            result[idx] = entry.model_copy(update={"room": room_id})
+        return result
+
     # ─── INFEASIBLE-Diagnostik ────────────────────────────────────────────────
 
     def _diagnose_infeasible(self) -> None:
@@ -821,7 +1367,7 @@ class ScheduleSolver:
         total_slots = tg.sek1_max_slot * tg.days_per_week
 
         total_need = sum(sum(c.curriculum.values()) for c in self.data.classes)
-        total_dep = sum(t.deputat for t in self.data.teachers)
+        total_dep = sum(t.deputat_max for t in self.data.teachers)
         delta = total_dep - total_need
 
         num_vars = len(self._slot) + len(self._assign)
@@ -837,7 +1383,16 @@ class ScheduleSolver:
             f"Gesamtdeputat: {total_dep}h | Gesamtbedarf: {total_need}h | Δ={delta:+d}h"
         )
 
-        # Pro Fach: Lehrer-Kapazität vs. Bedarf
+        # Kopplungs-abgedeckte Fächer bestimmen (diese brauchen keinen direkten Lehrer)
+        coupling_covered: set[str] = set()
+        for coupling in self.data.couplings:
+            if coupling.coupling_type == "wpf":
+                coupling_covered.add("WPF")
+            elif coupling.coupling_type == "reli_ethik":
+                for group in coupling.groups:
+                    coupling_covered.add(group.subject)
+
+        # Pro Fach: Lehrer-Kapazität vs. Bedarf (nur nicht-Kopplungs-Fächer)
         subject_need: dict[str, int] = {}
         for cls in self.data.classes:
             for subj, hours in cls.curriculum.items():
@@ -847,9 +1402,11 @@ class ScheduleSolver:
         subject_cap: dict[str, int] = {}
         for teacher in self.data.teachers:
             for subj in teacher.subjects:
-                subject_cap[subj] = subject_cap.get(subj, 0) + teacher.deputat
+                subject_cap[subj] = subject_cap.get(subj, 0) + teacher.deputat_max
 
         for subj, need in sorted(subject_need.items()):
+            if subj in coupling_covered:
+                continue  # Wird via Kopplung abgedeckt, kein direkter Kapazitäts-Check
             cap = subject_cap.get(subj, 0)
             if cap < need:
                 logger.error(
@@ -875,3 +1432,269 @@ class ScheduleSolver:
                         f"  Fachraum '{rtype}': Bedarf {need}h > "
                         f"verfügbare Slots {max_slots} ({cap} Räume × {total_slots})"
                     )
+
+    # ─── Soft-Constraints / Zielfunktion ──────────────────────────────────────
+
+    def _add_soft_objective(
+        self,
+        weights: Optional[dict] = None,
+        extra_terms: list = [],
+    ) -> None:
+        """Fügt weiche Zielfunktion (Minimierung) zum Modell hinzu.
+
+        extra_terms: bereits berechnete Terme (z.B. deputat_deviation), die
+        immer inkludiert werden sollen.
+        Gewichte für Komfort-Constraints können über weights überschrieben werden.
+        """
+        sc = self.config.solver
+        w = {
+            "gaps":           sc.weight_gaps,
+            "day_wishes":     sc.weight_day_wishes,
+            "double_lessons": sc.weight_double_lessons,
+            "subject_spread": sc.weight_subject_spread,
+        }
+        if weights:
+            w.update(weights)
+
+        terms = list(extra_terms)
+        if w["gaps"] > 0:
+            terms.extend(self._soft_gap_penalties(w["gaps"]))
+        if w["day_wishes"] > 0:
+            terms.extend(self._soft_day_wish_penalties(w["day_wishes"]))
+        if w["double_lessons"] > 0:
+            terms.extend(self._soft_double_preferred_bonuses(w["double_lessons"]))
+        if w["subject_spread"] > 0:
+            terms.extend(self._soft_subject_spread_penalties(w["subject_spread"]))
+
+        if terms:
+            self._model.minimize(sum(terms))
+
+    def _build_gap_vars(self) -> dict[tuple, list]:
+        """Erstellt is_gap BoolVars für alle Lehrer-Tag-Slot-Kombinationen.
+
+        Berücksichtigt reguläre Stunden (_slot via _sidx_teacher_day_slot) UND
+        Kopplungsstunden (_coupling_assign × _coupling_slot), damit Springstunden
+        zwischen Kopplungs- und regulären Stunden korrekt erkannt werden.
+
+        Gibt {(teacher_id, day): [is_gap BoolVar, ...]} zurück.
+        Wird einmalig in _add_constraints() aufgerufen und in self._gap_vars gecacht.
+        """
+        tg = self.config.time_grid
+        slot_numbers = sorted({s.slot_number for s in self.sek1_slots})
+
+        # Vorberechnen: welche (coupling_id, g_idx) ist jeder Lehrer Kandidat für?
+        teacher_coupling_groups: dict[str, list[tuple]] = {}
+        for (cid, g_idx, tid) in self._coupling_assign:
+            teacher_coupling_groups.setdefault(tid, []).append((cid, g_idx))
+
+        gap_vars: dict[tuple, list] = {}
+
+        for teacher in self.data.teachers:
+            t = teacher.id
+            cgroups = teacher_coupling_groups.get(t, [])
+
+            for day in range(tg.days_per_week):
+                active: dict[int, object] = {}
+
+                for h in slot_numbers:
+                    # Reguläre Slots (O(1) via Index)
+                    busy_vars = list(self._sidx_teacher_day_slot.get((t, day, h), []))
+
+                    # Kopplungs-Slots: Lehrer t ist an (day, h) beschäftigt wenn
+                    # coupling_assign[cid, g, t]=1 UND coupling_slot[cid, day, h]=1
+                    for (cid, g_idx) in cgroups:
+                        ca_var = self._coupling_assign.get((cid, g_idx, t))
+                        cs_var = self._coupling_slot.get((cid, day, h))
+                        if ca_var is None or cs_var is None:
+                            continue
+                        aux = self._model.new_bool_var(
+                            f"cbact_{t}_{cid}_{g_idx}_{day}_{h}"
+                        )
+                        self._model.add_bool_and([ca_var, cs_var]).only_enforce_if(aux)
+                        self._model.add_bool_or(
+                            [ca_var.negated(), cs_var.negated()]
+                        ).only_enforce_if(aux.negated())
+                        busy_vars.append(aux)
+
+                    if busy_vars:
+                        a = self._model.new_bool_var(f"tact_{t}_{day}_{h}")
+                        self._model.add_bool_or(busy_vars).only_enforce_if(a)
+                        self._model.add(sum(busy_vars) == 0).only_enforce_if(a.negated())
+                        active[h] = a
+
+                active_hs = sorted(active.keys())
+                if len(active_hs) < 3:
+                    continue  # Mindestens 3 Slots nötig für eine potenzielle Lücke
+
+                day_gap_vars: list = []
+                for i, h in enumerate(active_hs):
+                    before_vars = [active[h2] for h2 in active_hs[:i]]
+                    after_vars  = [active[h2] for h2 in active_hs[i + 1:]]
+                    if not before_vars or not after_vars:
+                        continue
+
+                    before = self._model.new_bool_var(f"tbef_{t}_{day}_{h}")
+                    after_ = self._model.new_bool_var(f"taft_{t}_{day}_{h}")
+                    is_gap = self._model.new_bool_var(f"tgap_{t}_{day}_{h}")
+
+                    self._model.add_bool_or(before_vars).only_enforce_if(before)
+                    self._model.add_bool_and(
+                        [v.negated() for v in before_vars]
+                    ).only_enforce_if(before.negated())
+
+                    self._model.add_bool_or(after_vars).only_enforce_if(after_)
+                    self._model.add_bool_and(
+                        [v.negated() for v in after_vars]
+                    ).only_enforce_if(after_.negated())
+
+                    # is_gap = before AND after_ AND NOT active[h]
+                    self._model.add_bool_and(
+                        [before, after_, active[h].negated()]
+                    ).only_enforce_if(is_gap)
+                    self._model.add_bool_or(
+                        [before.negated(), after_.negated(), active[h]]
+                    ).only_enforce_if(is_gap.negated())
+
+                    day_gap_vars.append(is_gap)
+
+                if day_gap_vars:
+                    gap_vars[(t, day)] = day_gap_vars
+
+        return gap_vars
+
+    def _c14_gap_limit(self) -> None:
+        """Harter Constraint: max. X Springstunden pro Lehrer pro Woche.
+
+        Rechtlicher Richtwert in deutschen Bundesländern: i. d. R. max. 7/Woche.
+        Deaktiviert wenn max_gaps_per_week=0 (nur Soft-Minimierung aktiv).
+        """
+        max_gaps = self.config.solver.max_gaps_per_week
+        if max_gaps <= 0:
+            return
+
+        tg = self.config.time_grid
+        for teacher in self.data.teachers:
+            t = teacher.id
+            teacher_gap_vars: list = []
+            for day in range(tg.days_per_week):
+                teacher_gap_vars.extend(self._gap_vars.get((t, day), []))
+            if teacher_gap_vars:
+                self._model.add(sum(teacher_gap_vars) <= max_gaps)
+
+    def _c14b_per_teacher_daily_gap_limit(self) -> None:
+        """Per-Lehrer tägliches Springstunden-Limit (teacher.max_gaps_per_day).
+
+        Verwendet die bereits berechneten _gap_vars aus _build_gap_vars().
+        Setzt sum(gap_vars für Lehrer t an Tag d) <= teacher.max_gaps_per_day.
+        """
+        teacher_map = {t.id: t for t in self.data.teachers}
+        for (t_id, day), gap_vars in self._gap_vars.items():
+            teacher = teacher_map.get(t_id)
+            if teacher is None or not gap_vars:
+                continue
+            if teacher.max_gaps_per_day >= 0:
+                self._model.add(sum(gap_vars) <= teacher.max_gaps_per_day)
+
+    def _soft_gap_penalties(self, weight: int) -> list:
+        """Springstunden-Strafe: nutzt vorberechnete _gap_vars (inkl. Kopplungen).
+
+        _gap_vars wird einmalig in _add_constraints() via _build_gap_vars() erstellt
+        und berücksichtigt sowohl reguläre als auch Kopplungsstunden.
+        """
+        terms = []
+        for vars_list in self._gap_vars.values():
+            for v in vars_list:
+                terms.append(v * weight)
+        return terms
+
+    def _soft_day_wish_penalties(self, weight: int) -> list:
+        """Strafe wenn Lehrer an einem bevorzugt freien Tag unterrichtet."""
+        tg = self.config.time_grid
+        terms = []
+
+        for teacher in self.data.teachers:
+            if not teacher.preferred_free_days:
+                continue
+            t = teacher.id
+            for pref_day in teacher.preferred_free_days:
+                if pref_day < 0 or pref_day >= tg.days_per_week:
+                    continue
+                day_vars = [
+                    self._slot[k] for k in self._slot
+                    if k[0] == t and k[3] == pref_day
+                ]
+                if day_vars:
+                    has_lesson = self._model.new_bool_var(
+                        f"soft_daywish_{t}_{pref_day}"
+                    )
+                    self._model.add_bool_or(day_vars).only_enforce_if(has_lesson)
+                    self._model.add(sum(day_vars) == 0).only_enforce_if(
+                        has_lesson.negated()
+                    )
+                    terms.append(has_lesson * weight)
+
+        return terms
+
+    def _soft_double_preferred_bonuses(self, weight: int) -> list:
+        """Bonus für Doppelstunden bei double_preferred-Fächern (negativer Zielfunktionsterm)."""
+        double_preferred = {
+            n for n, m in SUBJECT_METADATA.items()
+            if m.get("double_preferred")
+        }
+        terms = []
+        for (t, c, s, day, bs), dvar in self._double.items():
+            if s in double_preferred:
+                terms.append(-weight * dvar)
+        return terms
+
+    def _soft_subject_spread_penalties(self, weight: int) -> list:
+        """Strafe wenn ein Hauptfach an zu vielen verschiedenen Tagen unterrichtet wird.
+
+        Zählt die Tage, an denen jedes Hauptfach in jeder Klasse vorkommt.
+        Je mehr Tage, desto höher die Strafe (fördert Bündelung in Doppelstunden).
+        """
+        tg = self.config.time_grid
+        hauptfach_subjects = {
+            n for n, m in SUBJECT_METADATA.items()
+            if m.get("is_hauptfach")
+        }
+        terms = []
+
+        for (t, c, s) in self._assign:
+            if s not in hauptfach_subjects:
+                continue
+            for day in range(tg.days_per_week):
+                day_vars = self._sidx_tcsd.get((t, c, s, day), [])
+                if day_vars:
+                    day_active = self._model.new_bool_var(
+                        f"soft_spread_{t}_{c}_{s}_{day}"
+                    )
+                    self._model.add_bool_or(day_vars).only_enforce_if(day_active)
+                    self._model.add(sum(day_vars) == 0).only_enforce_if(
+                        day_active.negated()
+                    )
+                    terms.append(day_active * weight)
+
+        return terms
+
+    def _soft_deputat_deviation_penalties(self, weight: int) -> list:
+        """Straft Unterauslastung: dev = deputat_max − actual (≥ 0 durch _c7 garantiert)."""
+        terms = []
+        for teacher in self.data.teachers:
+            slot_vars = [v for k, v in self._slot.items() if k[0] == teacher.id]
+            coupling_terms = []
+            for coupling in self.data.couplings:
+                for g_idx, group in enumerate(coupling.groups):
+                    ca_key = (coupling.id, g_idx, teacher.id)
+                    if ca_key in self._coupling_assign:
+                        h = group.hours_per_week
+                        if h > 0:
+                            coupling_terms.append(self._coupling_assign[ca_key] * h)
+            if not (slot_vars or coupling_terms):
+                continue
+            dev = self._model.new_int_var(0, teacher.deputat_max, f"dep_dev_{teacher.id}")
+            self._model.add(
+                dev == teacher.deputat_max - (sum(slot_vars) + sum(coupling_terms))
+            )
+            terms.append(dev * weight)
+        return terms

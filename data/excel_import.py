@@ -166,21 +166,80 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         for col, val in enumerate(row_vals, 1):
             style_data(ws_jg.cell(row=r, column=col, value=val), alt=alt)
 
-    # ── Blatt 3: Stundentafel ─────────────────────────────────────────────────
+    # ── Blatt 3: Fächer ───────────────────────────────────────────────────────
+    ws_fa = wb.create_sheet("Fächer")
+    fa_headers = [
+        "Fachname", "Kürzel", "Kategorie", "Hauptfach (ja/nein)",
+        "Fachraum-Typ", "Doppelstunde Pflicht", "Doppelstunde Bevorzugt",
+    ]
+    for col, h in enumerate(fa_headers, 1):
+        style_header(ws_fa.cell(row=1, column=col, value=h))
+    widths_fa = [18, 10, 14, 20, 16, 22, 24]
+    for col, w in enumerate(widths_fa, 1):
+        set_col_width(ws_fa, col, w)
+
+    # Hinweis in Zeile 2
+    note_cell = ws_fa.cell(
+        row=2, column=1,
+        value="Beispiel-Vorlage — bitte anpassen. "
+              "Zeilen können hinzugefügt, geändert oder gelöscht werden.",
+    )
+    note_cell.font = Font(italic=True, color="888888", size=10)
+    ws_fa.merge_cells(start_row=2, start_column=1,
+                      end_row=2, end_column=len(fa_headers))
+
+    dv_ja_nein = DataValidation(
+        type="list", formula1='"ja,nein"', allow_blank=False, showDropDown=False
+    )
+    dv_ja_nein.sqref = "D3:D200"
+    ws_fa.add_data_validation(dv_ja_nein)
+    dv_bool_f = DataValidation(
+        type="list", formula1='"ja,nein"', allow_blank=True, showDropDown=False
+    )
+    dv_bool_f.sqref = "F3:G200"
+    ws_fa.add_data_validation(dv_bool_f)
+
+    for r, (name, meta) in enumerate(SUBJECT_METADATA.items(), 3):
+        alt = (r % 2 == 0)
+        row_vals = [
+            name,
+            meta["short"],
+            meta["category"],
+            "ja" if meta["is_hauptfach"] else "nein",
+            meta.get("room") or "",
+            "ja" if meta.get("double_required") else "nein",
+            "ja" if meta.get("double_preferred") else "nein",
+        ]
+        for col, val in enumerate(row_vals, 1):
+            style_data(ws_fa.cell(row=r, column=col, value=val), alt=alt)
+
+    # ── Blatt 4: Stundentafel ─────────────────────────────────────────────────
     ws_st = wb.create_sheet("Stundentafel")
     all_subjects = list(SUBJECT_METADATA.keys())
     grade_nums = sorted(STUNDENTAFEL_GYMNASIUM_SEK1.keys())
 
-    # Kopfzeile: Jahrgang-Spalten
-    style_header(ws_st.cell(row=1, column=1, value="Fach"))
+    # Hinweis in Zeile 1 (merged)
+    note_st = ws_st.cell(
+        row=1, column=1,
+        value="Wochenstunden pro Klasse und Fach — bitte vollständig ausfüllen. "
+              "Die Fächer müssen mit dem Blatt 'Fächer' übereinstimmen.",
+    )
+    note_st.font = Font(italic=True, color="555555", size=10)
+    ws_st.merge_cells(
+        start_row=1, start_column=1,
+        end_row=1, end_column=len(grade_nums) + 1,
+    )
+
+    # Kopfzeile: Jahrgang-Spalten (Zeile 2)
+    style_header(ws_st.cell(row=2, column=1, value="Fach"))
     for col, grade in enumerate(grade_nums, 2):
-        style_header(ws_st.cell(row=1, column=col, value=f"Jg. {grade}"))
+        style_header(ws_st.cell(row=2, column=col, value=f"Jg. {grade}"))
 
     set_col_width(ws_st, 1, 16)
     for col in range(2, len(grade_nums) + 2):
         set_col_width(ws_st, col, 10)
 
-    for r, subj in enumerate(all_subjects, 2):
+    for r, subj in enumerate(all_subjects, 3):
         alt = (r % 2 == 0)
         style_data(ws_st.cell(row=r, column=1, value=subj), alt=alt)
         for col, grade in enumerate(grade_nums, 2):
@@ -188,43 +247,28 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
             cell = ws_st.cell(row=r, column=col, value=hours if hours else "")
             style_data(cell, alt=alt)
 
-    # ── Blatt 4: Lehrkräfte ───────────────────────────────────────────────────
+    # ── Blatt 5: Lehrkräfte ───────────────────────────────────────────────────
     ws_lk = wb.create_sheet("Lehrkräfte")
     lk_headers = [
-        "Name (Nachname, Vorname)", "Kürzel", "Fach 1", "Fach 2", "Fach 3",
+        "Name (Nachname, Vorname)", "Kürzel", "Fächer (kommagetrennt)",
         "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
         "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
     ]
     for col, h in enumerate(lk_headers, 1):
         style_header(ws_lk.cell(row=1, column=col, value=h))
 
-    widths_lk = [28, 10, 16, 16, 16, 10, 10, 26, 22, 12, 16]
+    widths_lk = [28, 10, 32, 10, 10, 26, 22, 12, 16]
     for col, w in enumerate(widths_lk, 1):
         set_col_width(ws_lk, col, w)
 
     # Beispielzeile (kursiv)
     example_row = [
-        "Müller, Hans", "MÜL", "Mathematik", "Physik", "",
+        "Müller, Hans", "MÜL", "Mathematik, Physik",
         26, "nein", "Mi5", "Fr", 6, 2,
     ]
     for col, val in enumerate(example_row, 1):
         style_example(ws_lk.cell(row=2, column=col, value=val))
     ws_lk.cell(row=2, column=1).comment = None
-
-    # Dropdown-Validierung für Fächer (Spalten 3-5)
-    subject_list = ",".join(all_subjects)
-    # openpyxl DataValidation: Dropdown via formula (list muss kurz sein)
-    # Wegen Längenbeschränkung: nur Formel-basiert mit benanntem Bereich oder direkt
-    # Für Excel-Kompatibilität: Dropdown über explizite Liste (max 255 Zeichen)
-    # Kürzel der Fächer passen; Vollnamen ggf. zu lang → separate Hilfsliste
-    dv_subject = DataValidation(
-        type="list",
-        formula1='"' + ",".join(all_subjects[:20]) + '"',  # Ersten 20 Fächer
-        allow_blank=True,
-        showDropDown=False,
-    )
-    dv_subject.sqref = "C3:E200"
-    ws_lk.add_data_validation(dv_subject)
 
     dv_teilzeit = DataValidation(
         type="list",
@@ -232,10 +276,26 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         allow_blank=False,
         showDropDown=False,
     )
-    dv_teilzeit.sqref = "G3:G200"
+    dv_teilzeit.sqref = "E3:E200"
     ws_lk.add_data_validation(dv_teilzeit)
 
-    # ── Blatt 5: Fachräume ────────────────────────────────────────────────────
+    dv_max_h = DataValidation(
+        type="whole", operator="between",
+        formula1="1", formula2="8",
+        allow_blank=True,
+    )
+    dv_max_h.sqref = "H3:H200"
+    ws_lk.add_data_validation(dv_max_h)
+
+    dv_max_g = DataValidation(
+        type="whole", operator="between",
+        formula1="0", formula2="4",
+        allow_blank=True,
+    )
+    dv_max_g.sqref = "I3:I200"
+    ws_lk.add_data_validation(dv_max_g)
+
+    # ── Blatt 6: Fachräume ────────────────────────────────────────────────────
     ws_fr = wb.create_sheet("Fachräume")
     fr_headers = ["Raumtyp (intern)", "Anzeigename", "Anzahl"]
     for col, h in enumerate(fr_headers, 1):
@@ -255,7 +315,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     for col, val in enumerate(example_fr, 1):
         style_example(ws_fr.cell(row=len(config.rooms.special_rooms) + 2, column=col, value=val))
 
-    # ── Blatt 6: Kopplungen ───────────────────────────────────────────────────
+    # ── Blatt 7: Kopplungen ───────────────────────────────────────────────────
     ws_kp = wb.create_sheet("Kopplungen")
     kp_headers = [
         "ID", "Typ (reli_ethik/wpf)", "Beteiligte Klassen (kommagetrennt)",
@@ -325,7 +385,7 @@ class ExcelImporter:
         ]
         result = []
         for row in rows[1:]:
-            if all(v is None for v in row):
+            if all(v is None or v == "" for v in row):
                 continue
             result.append({
                 headers[i]: (str(v).strip() if v is not None else "")
@@ -353,6 +413,188 @@ class ExcelImporter:
             f"Ähnliche Fächer: {', '.join(difflib.get_close_matches(name, self._known_subjects, n=3, cutoff=0.4)) or 'keine'}"
         )
         return None
+
+    # ── Fächer ──────────────────────────────────────────────────────────────
+
+    def import_subjects(self) -> list[Subject]:
+        """Importiert Fächer aus Blatt 'Fächer'.
+
+        Fallback auf SUBJECT_METADATA wenn das Blatt komplett fehlt.
+        Unvollständige Zeilen werden mit Warnung übersprungen.
+        """
+        sheet = self._get_sheet("Fächer")
+        if sheet is None:
+            # Blatt fehlt komplett → NRW-Defaults
+            return [
+                Subject(
+                    name=name,
+                    short_name=meta["short"],
+                    category=meta["category"],
+                    is_hauptfach=meta["is_hauptfach"],
+                    requires_special_room=meta["room"],
+                    double_lesson_required=meta["double_required"],
+                    double_lesson_preferred=meta["double_preferred"],
+                )
+                for name, meta in SUBJECT_METADATA.items()
+            ]
+
+        rows = self._sheet_rows(sheet)
+        # Hinweis-Zeile (kursiv-Text) herausfiltern
+        data_rows = [
+            r for r in rows
+            if r.get("fachname", "").strip()
+            and "vorlage" not in r.get("fachname", "").lower()
+            and "beispiel" not in r.get("fachname", "").lower()
+        ]
+
+        if not data_rows:
+            self._warnings.append(
+                "Blatt 'Fächer' ist vorhanden aber leer → "
+                "Fallback auf NRW-Standard-Fächer."
+            )
+            return [
+                Subject(
+                    name=name,
+                    short_name=meta["short"],
+                    category=meta["category"],
+                    is_hauptfach=meta["is_hauptfach"],
+                    requires_special_room=meta["room"],
+                    double_lesson_required=meta["double_required"],
+                    double_lesson_preferred=meta["double_preferred"],
+                )
+                for name, meta in SUBJECT_METADATA.items()
+            ]
+
+        subjects = []
+        for i, row in enumerate(data_rows, 3):
+            name = row.get("fachname", "").strip()
+            if not name:
+                continue
+            short = row.get("kürzel", row.get("kurzel", name[:2])).strip() or name[:2]
+            category = row.get("kategorie", "sonstige").strip() or "sonstige"
+            hf_raw = row.get("hauptfach (ja/nein)", "nein").strip().lower()
+            is_hf = hf_raw in ("ja", "yes", "true", "1", "x")
+            room_type = row.get("fachraum-typ", "").strip() or None
+            dr_raw = row.get("doppelstunde pflicht", "nein").strip().lower()
+            dp_raw = row.get("doppelstunde bevorzugt", "nein").strip().lower()
+            subjects.append(Subject(
+                name=name,
+                short_name=short,
+                category=category,
+                is_hauptfach=is_hf,
+                requires_special_room=room_type,
+                double_lesson_required=dr_raw in ("ja", "yes", "true", "1", "x"),
+                double_lesson_preferred=dp_raw in ("ja", "yes", "true", "1", "x"),
+            ))
+
+        if not subjects:
+            self._warnings.append(
+                "Blatt 'Fächer' enthält keine gültigen Einträge → "
+                "Fallback auf NRW-Standard-Fächer."
+            )
+            return [
+                Subject(
+                    name=name,
+                    short_name=meta["short"],
+                    category=meta["category"],
+                    is_hauptfach=meta["is_hauptfach"],
+                    requires_special_room=meta["room"],
+                    double_lesson_required=meta["double_required"],
+                    double_lesson_preferred=meta["double_preferred"],
+                )
+                for name, meta in SUBJECT_METADATA.items()
+            ]
+
+        # Aktualisiere bekannte Fächer für _parse_subject
+        self._known_subjects = [s.name for s in subjects]
+        return subjects
+
+    # ── Stundentafel ────────────────────────────────────────────────────────
+
+    def import_stundentafel(
+        self, known_subjects: list[str]
+    ) -> dict[int, dict[str, int]]:
+        """Importiert die Stundentafel aus Blatt 'Stundentafel'.
+
+        Gibt {Jahrgang: {Fach: Stunden}} zurück.
+        Fallback auf STUNDENTAFEL_GYMNASIUM_SEK1 wenn das Blatt fehlt.
+        Bei vorhandenem Blatt werden NUR die eingetragenen Werte verwendet —
+        fehlende Zellen = 0 Stunden (kein NRW-Inject).
+        """
+        sheet = self._get_sheet("Stundentafel")
+        if sheet is None:
+            return dict(STUNDENTAFEL_GYMNASIUM_SEK1)
+
+        # Rohzeilen lesen
+        all_rows = list(sheet.iter_rows(values_only=True))
+        if not all_rows:
+            return dict(STUNDENTAFEL_GYMNASIUM_SEK1)
+
+        # Hinweis-Zeile überspringen: Blatt hat optionalen Merge in Zeile 1
+        # Suche die Kopfzeile (erste Zeile mit "fach" als erstem nicht-leerem Wert)
+        header_row_idx = None
+        for idx, row in enumerate(all_rows):
+            first_val = str(row[0] or "").strip().lower()
+            if first_val == "fach":
+                header_row_idx = idx
+                break
+
+        if header_row_idx is None:
+            self._warnings.append(
+                "Stundentafel-Blatt hat keine 'Fach'-Kopfzeile → "
+                "Fallback auf NRW-Stundentafel."
+            )
+            return dict(STUNDENTAFEL_GYMNASIUM_SEK1)
+
+        header = all_rows[header_row_idx]
+        # Erste Spalte = Fachname, Rest = Jahrgänge (z.B. "Jg. 5" oder "5")
+        grade_cols: dict[int, int] = {}  # col_index → grade_number
+        for col_idx, cell_val in enumerate(header[1:], 1):
+            if cell_val is None:
+                continue
+            raw = str(cell_val).strip().lower().replace("jg.", "").replace("jg", "").strip()
+            try:
+                grade = int(float(raw))
+                grade_cols[col_idx] = grade
+            except ValueError:
+                pass
+
+        if not grade_cols:
+            self._warnings.append(
+                "Stundentafel-Blatt hat keine Jahrgangs-Spalten → "
+                "Fallback auf NRW-Stundentafel."
+            )
+            return dict(STUNDENTAFEL_GYMNASIUM_SEK1)
+
+        result: dict[int, dict[str, int]] = {g: {} for g in grade_cols.values()}
+
+        for row in all_rows[header_row_idx + 1:]:
+            if all(v is None for v in row):
+                continue
+            subj_raw = str(row[0] or "").strip()
+            if not subj_raw or subj_raw.lower() == "fach":
+                continue
+            # Fach validieren (fuzzy)
+            subj = subj_raw if subj_raw in known_subjects else None
+            if subj is None:
+                match = _fuzzy_subject(subj_raw, known_subjects)
+                if match:
+                    subj = match
+                else:
+                    self._warnings.append(
+                        f"Stundentafel: Unbekanntes Fach '{subj_raw}' — Zeile übersprungen."
+                    )
+                    continue
+            for col_idx, grade in grade_cols.items():
+                cell_val = row[col_idx] if col_idx < len(row) else None
+                try:
+                    hours = int(float(str(cell_val))) if cell_val not in (None, "") else 0
+                except (ValueError, TypeError):
+                    hours = 0
+                if hours > 0:
+                    result[grade][subj] = hours
+
+        return result
 
     # ── Zeitraster ──────────────────────────────────────────────────────────
 
@@ -418,14 +660,25 @@ class ExcelImporter:
                 continue
             used_ids.add(abbr)
 
-            # Fächer
+            # Fächer — neues Format (kommagetrennt) hat Vorrang vor altem Format (Fach 1/2/3)
             subjects = []
-            for fach_key in ["fach 1", "fach1", "fach 2", "fach2", "fach 3", "fach3"]:
-                raw = row.get(fach_key, "").strip()
-                if raw:
-                    s = self._parse_subject(raw, f"Zeile {i}, Kürzel {abbr}")
-                    if s:
-                        subjects.append(s)
+            komma_raw = row.get("fächer (kommagetrennt)", row.get("faecher (kommagetrennt)", "")).strip()
+            if komma_raw:
+                # Neues Format
+                for item in komma_raw.split(","):
+                    item = item.strip()
+                    if item:
+                        s = self._parse_subject(item, f"Zeile {i}, Kürzel {abbr}")
+                        if s:
+                            subjects.append(s)
+            else:
+                # Altes Format (Rückwärtskompatibilität)
+                for fach_key in ["fach 1", "fach1", "fach 2", "fach2", "fach 3", "fach3"]:
+                    raw = row.get(fach_key, "").strip()
+                    if raw:
+                        s = self._parse_subject(raw, f"Zeile {i}, Kürzel {abbr}")
+                        if s:
+                            subjects.append(s)
 
             # Deputat
             dep_raw = row.get("deputat", "").strip()
@@ -463,11 +716,14 @@ class ExcelImporter:
             except ValueError:
                 max_g = tc.max_gaps_per_day
 
+            deputat_max = deputat + tc.deputat_max_buffer
+            deputat_min = max(1, round(deputat_max * tc.deputat_min_fraction))
             teachers.append(Teacher(
                 id=abbr,
                 name=name,
                 subjects=subjects,
-                deputat=deputat,
+                deputat_max=deputat_max,
+                deputat_min=deputat_min,
                 is_teilzeit=is_teilzeit,
                 unavailable_slots=unavailable,
                 preferred_free_days=free_days,
@@ -515,10 +771,21 @@ class ExcelImporter:
 
     # ── Klassen aus Jahrgänge-Blatt ────────────────────────────────────────
 
-    def import_classes(self) -> list[SchoolClass]:
+    def import_classes(
+        self,
+        stundentafel: Optional[dict[int, dict[str, int]]] = None,
+    ) -> list[SchoolClass]:
+        """Importiert Klassen aus dem 'Jahrgänge'-Blatt.
+
+        Args:
+            stundentafel: {Jahrgang: {Fach: Stunden}}.
+                          Wenn None, wird STUNDENTAFEL_GYMNASIUM_SEK1 verwendet.
+        """
+        if stundentafel is None:
+            stundentafel = STUNDENTAFEL_GYMNASIUM_SEK1
+
         sheet = self._get_sheet("Jahrgänge")
         if sheet is None:
-            # Fallback: Klassen aus Config ableiten
             return []
 
         rows = self._sheet_rows(sheet)
@@ -534,7 +801,9 @@ class ExcelImporter:
             try:
                 grade = int(float(grade_raw))
             except ValueError:
-                self._warnings.append(f"Jahrgänge Zeile {i}: Ungültiger Jahrgang '{grade_raw}'")
+                self._warnings.append(
+                    f"Jahrgänge Zeile {i}: Ungültiger Jahrgang '{grade_raw}'"
+                )
                 continue
 
             try:
@@ -544,7 +813,7 @@ class ExcelImporter:
 
             curriculum = {
                 f: h
-                for f, h in STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).items()
+                for f, h in stundentafel.get(grade, {}).items()
                 if h > 0
             }
 
@@ -635,19 +904,12 @@ class ExcelImporter:
         # Zeitraster optional überschreiben
         self.import_time_grid()
 
-        # Fächer aus SUBJECT_METADATA
-        subjects = [
-            Subject(
-                name=name,
-                short_name=meta["short"],
-                category=meta["category"],
-                is_hauptfach=meta["is_hauptfach"],
-                requires_special_room=meta["room"],
-                double_lesson_required=meta["double_required"],
-                double_lesson_preferred=meta["double_preferred"],
-            )
-            for name, meta in SUBJECT_METADATA.items()
-        ]
+        # Fächer aus 'Fächer'-Blatt (Fallback: SUBJECT_METADATA)
+        subjects = self.import_subjects()
+        known_names = [s.name for s in subjects]
+
+        # Stundentafel aus 'Stundentafel'-Blatt (Fallback: NRW-Defaults)
+        stundentafel = self.import_stundentafel(known_names)
 
         # Räume
         try:
@@ -658,7 +920,7 @@ class ExcelImporter:
 
         # Klassen
         try:
-            classes = self.import_classes()
+            classes = self.import_classes(stundentafel=stundentafel)
         except ExcelImportError as e:
             self._errors.append(f"Klassen: {e}")
             classes = []
@@ -725,4 +987,129 @@ def import_from_excel(
         ExcelImportError: Bei kritischen Import-Fehlern.
     """
     importer = ExcelImporter(path, config)
+    return importer.import_all()
+
+
+# ─── CSV-IMPORTER ──────────────────────────────────────────────────────────────
+
+# Dateiname → Sheet-Name Mapping (case-insensitive, Umlaute normalisiert)
+_CSV_SHEET_MAP: dict[str, str] = {
+    "lehrkraefte": "Lehrkräfte",
+    "lehrkräfte": "Lehrkräfte",
+    "lehrkraefte": "Lehrkräfte",
+    "stundentafel": "Stundentafel",
+    "jahrgaenge": "Jahrgänge",
+    "jahrgänge": "Jahrgänge",
+    "faecher": "Fächer",
+    "fächer": "Fächer",
+    "fachraeume": "Fachräume",
+    "fachräume": "Fachräume",
+    "kopplungen": "Kopplungen",
+    "zeitraster": "Zeitraster",
+}
+
+
+def _normalize_filename(name: str) -> str:
+    """Normalisiert Dateinamen für das Mapping (Kleinbuchstaben, kein Suffix)."""
+    import unicodedata
+    name = name.lower()
+    # Umlaute belassen — Mapping hat beide Varianten
+    return name
+
+
+class CsvImporter(ExcelImporter):
+    """Importiert Schuldaten aus CSV-Dateien.
+
+    Akzeptiert:
+    - Ein Verzeichnis mit CSV-Dateien benannt nach ihren Blättern
+      (z.B. Lehrkraefte.csv, Stundentafel.csv, ...)
+    - Eine einzelne .csv-Datei → wird als 'Lehrkräfte'-Blatt behandelt
+    """
+
+    def __init__(self, path: Path, config: SchoolConfig) -> None:
+        super().__init__(path, config)
+        self._csv_sheets: dict[str, list[dict]] = {}
+
+    def _open(self) -> None:
+        import csv
+
+        path = Path(self.path)
+        if path.is_dir():
+            for csv_file in sorted(path.glob("*.csv")):
+                stem = _normalize_filename(csv_file.stem)
+                sheet_name = _CSV_SHEET_MAP.get(stem)
+                if sheet_name is None:
+                    # Try partial match
+                    for key, val in _CSV_SHEET_MAP.items():
+                        if key in stem or stem in key:
+                            sheet_name = val
+                            break
+                if sheet_name is None:
+                    sheet_name = csv_file.stem  # Fallback: Dateiname als Sheet-Name
+                with open(csv_file, encoding="utf-8-sig", newline="") as f:
+                    reader = csv.DictReader(f)
+                    rows = [
+                        {k.strip(): (v.strip() if v else "") for k, v in row.items()}
+                        for row in reader
+                    ]
+                self._csv_sheets[sheet_name] = rows
+        elif path.suffix.lower() == ".csv":
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                import csv as _csv
+                reader = _csv.DictReader(f)
+                rows = [
+                    {k.strip(): (v.strip() if v else "") for k, v in row.items()}
+                    for row in reader
+                ]
+            self._csv_sheets["Lehrkräfte"] = rows
+        else:
+            raise ExcelImportError(
+                f"Unbekanntes Dateiformat: {path}. "
+                "Erwartet: .xlsx, .csv oder Verzeichnis mit CSV-Dateien."
+            )
+
+    def _get_sheet(self, name: str):
+        if not self._csv_sheets:
+            self._open()
+        # Suche case-insensitive
+        for sn, rows in self._csv_sheets.items():
+            if sn.strip().lower() == name.strip().lower():
+                return _CsvSheetProxy(rows)
+        return None
+
+
+class _CsvSheetProxy:
+    """Adapter, der eine Liste von Dicts als Sheet-ähnliches Objekt bereitstellt.
+
+    Kompatibel mit ExcelImporter._sheet_rows() indem iter_rows() emuliert wird.
+    """
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def iter_rows(self, values_only: bool = True):
+        if not self._rows:
+            return iter([])
+        headers = list(self._rows[0].keys())
+        yield tuple(headers)
+        for row in self._rows:
+            yield tuple(row.get(h, "") for h in headers)
+
+
+def import_from_csv(
+    path: Path, config: SchoolConfig
+) -> tuple[SchoolData, FeasibilityReport]:
+    """Importiert Schuldaten aus CSV-Datei(en).
+
+    Args:
+        path:   Pfad zu einer .csv-Datei oder einem Verzeichnis mit CSV-Dateien
+        config: Basis-Konfiguration
+
+    Returns:
+        (SchoolData, FeasibilityReport)
+
+    Raises:
+        ExcelImportError: Bei kritischen Import-Fehlern.
+    """
+    importer = CsvImporter(path, config)
     return importer.import_all()

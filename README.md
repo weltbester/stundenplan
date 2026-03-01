@@ -318,6 +318,25 @@ python main.py solve --small
 python main.py show Q1-LK-Ma
 ```
 
+### Excel-Import für Oberstufe
+
+Jahrgänge ≥ 11 im `Jahrgänge`-Sheet werden beim Import automatisch als
+Kurse behandelt (`is_course=True`, `max_slot=sek2_max_slot`).
+Der optionale `Kurstyp (LK/GK)`-Dropdown in Spalte E legt `course_type` fest.
+
+Kursschienen werden im separaten `Kursschienen`-Sheet definiert:
+
+| ID | Name | Kurse (kommagetrennt) | Stunden/Woche |
+|----|------|----------------------|---------------|
+| Q1-KS1 | Kursschiene 1 (Q1) | Q1-LK-Ma,Q1-GK-De,Q1-GK-Bi | 3 |
+
+Jede Zeile erzeugt ein `CourseTrack`-Objekt. Die Kurs-IDs müssen mit den
+im `Jahrgänge`-Sheet generierten IDs übereinstimmen (Schema: `{Jahrgang}{Buchstabe}`,
+z.B. `11a`, `12b`).
+
+Lehrkräfte mit `Sek-II berechtigt = nein` (Spalte M) werden keinen
+Oberstufen-Kursen zugewiesen.
+
 ---
 
 ## Excel-Import
@@ -335,12 +354,13 @@ Die Vorlage enthält folgende Tabellenblätter:
 | Sheet | Inhalt |
 |-------|--------|
 | Zeitraster | Slot-Nummern, Uhrzeiten, Sek-II-only-Flag |
-| Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden |
+| Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden, Kurstyp (LK/GK für Jg. ≥ 11) |
 | Fächer | Fach-Kürzel, Name, Raumtyp |
 | Stundentafel | Jahrgang × Fach = Wochenstunden |
 | Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten, individuelle Limits |
 | Fachräume | Raumtyp, Name, Anzahl |
 | Kopplungen | Jahrgang, Typ, Klassen, Gruppen, Stunden |
+| Kursschienen | ID, Name, Kurse (kommagetrennt), Stunden/Woche — optional, nur Oberstufe |
 
 ### Lehrkräfte-Spalten
 

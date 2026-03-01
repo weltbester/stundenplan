@@ -1,6 +1,6 @@
 # Stundenplan-Generator
 
-Automatischer Stundenplan-Generator für ein deutsches Gymnasium (Sekundarstufe I).
+Automatischer Stundenplan-Generator für deutsche Schulen (Sekundarstufe I).
 Löst die Stundenzuweisung als Constraint-Satisfaction-Problem mit Google OR-Tools CP-SAT.
 
 ## Features
@@ -13,19 +13,25 @@ Löst die Stundenzuweisung als Constraint-Satisfaction-Problem mit Google OR-Too
   Blöcken (nie über Pausen hinweg).
 - **Klassenübergreifende Kopplungen**: Religion/Ethik und Wahlpflichtfächer (WPF)
   werden korrekt über Parallelklassen hinweg modelliert.
-- **Fachraum-Zuweisung**: Konkrete Räume (z.B. CH-1, CH-2) werden gleichmäßig belegt.
+- **Fachraum-Zuweisung**: Greedy-Fast-Path + CP-SAT Second-Pass für optimale
+  Raumverteilung.
 - **Export**: Excel-Arbeitsmappen und PDF-Dateien mit Uhrzeiten, Pausenzeilen und
   Farbcodierung.
+- **Interaktiver TUI-Browser**: Vollständige Terminal-UI-Navigation durch alle
+  Klassen- und Lehrerpläne.
 - **Terminal-Viewer**: Schnelle Ansicht einzelner Stundenpläne direkt im Terminal.
 - **Validierung**: Unabhängige Nachprüfung der Lösung auf Konflikte und Fehler.
 - **Qualitätsbericht**: Springstunden, Deputat-Einhaltung und Wunsch-freie Tage.
 - **Vertretungshelfer**: Sofortvorschläge bei Lehrerausfall.
-
-### Einschränkungen v1
-
-- Nur Sekundarstufe I (Jg. 5–10). Oberstufe folgt in v2.
-- Keine Kursschienen oder Lerngruppen über mehrere Jahrgänge.
-- Raum-Zuweisung als Post-Processing (Greedy), kein Solver-integriertes Raummodell.
+- **Adaptiver Two-Pass-Solver**: Automatisch aktiviert ab ≥ 20 Klassen für
+  deutlich schnellere Lösungen.
+- **Daten-Diff**: Vergleich zweier Schulkonfigurationen (Lehrer, Stundentafel,
+  Kopplungen) mit Rich-Ausgabe oder JSON.
+- **Inkrementelles Re-Solving**: Einzeländerungen ohne vollständigen Neustart.
+- **Untis-Import**: `.gpn`/XML-Format für Schulen mit Bestandsdaten inkl.
+  Stunden-Pinning.
+- **Mehrere Schulformen**: Gymnasium, Realschule, Gesamtschule, Hauptschule,
+  Berufsschule, Gemeinschaftsschule.
 
 ---
 
@@ -50,6 +56,7 @@ click>=8.0          # CLI-Framework
 openpyxl>=3.1       # Excel-Export
 fpdf2>=2.7          # PDF-Export
 pytest>=7.0         # Tests
+textual>=0.60       # TUI-Browser (optional)
 ```
 
 ---
@@ -66,6 +73,7 @@ python main.py run
 # 3. Ergebnis ansehen
 python main.py show 5a       # Klasse 5a im Terminal
 python main.py show MÜL      # Lehrer MÜL im Terminal
+python main.py browse        # Interaktiver TUI-Browser
 python main.py quality       # Qualitätsbericht
 ```
 
@@ -92,8 +100,12 @@ python main.py generate --seed 123     # Reproduzierbare Daten (Seed)
 
 python main.py template                # Excel-Import-Vorlage erzeugen
 python main.py import lehrkraefte.xlsx # Echte Schuldaten aus Excel importieren
+python main.py import daten.csv        # CSV-Import (auto-erkannt)
 python main.py validate                # Machbarkeits-Check (ohne Lösung)
 python main.py validate --solution     # Lösung zusätzlich validieren
+
+python main.py diff alt.json neu.json  # Zwei Datenstände vergleichen
+python main.py diff alt.json neu.json --format json  # JSON-Ausgabe
 ```
 
 ### Solver
@@ -106,7 +118,13 @@ python main.py solve --time-limit 120  # Zeitlimit in Sekunden
 python main.py solve --diagnose        # Bei INFEASIBLE: Ursachen ermitteln
 python main.py solve --weights gaps=200 subject_spread=80  # Gewichte anpassen
 python main.py solve --verbose         # Solver-Fortschritt anzeigen
+python main.py solve --two-pass        # Two-Pass-Modus erzwingen
+python main.py solve --no-two-pass     # Two-Pass-Modus deaktivieren
+python main.py solve --incremental     # Re-Solve: fixiert unveränderte Stunden
+python main.py solve --save-versioned  # Lösung mit Zeitstempel speichern
 ```
+
+Two-Pass wird automatisch aktiviert wenn ≥ 20 Klassen erkannt werden.
 
 ### Export
 
@@ -117,16 +135,18 @@ python main.py export --format pdf     # Nur PDF
 python main.py export --output-dir mein_ordner/
 ```
 
-### Terminal-Viewer
+### Terminal-Viewer und TUI-Browser
 
 ```bash
 python main.py show 5a                 # Stundenplan Klasse 5a
 python main.py show 10c                # Stundenplan Klasse 10c
 python main.py show MÜL                # Stundenplan Lehrer MÜL
-python main.py show SCH                # Stundenplan Lehrer SCH
+python main.py browse                  # Interaktiver TUI-Browser
 ```
 
 Springstunden werden rot hinterlegt. Fächer sind farbcodiert nach Kategorie.
+
+Im TUI-Browser: `j`/`k` oder `↑↓` navigieren, `/` sucht, `q` oder `Escape` beendet.
 
 ### Qualität und Analyse
 
@@ -246,6 +266,7 @@ Vorlage erzeugen und ausfüllen:
 ```bash
 python main.py template           # erzeugt output/import_vorlage.xlsx
 python main.py import meine_daten.xlsx
+python main.py import meine_daten.csv  # CSV-Verzeichnis ebenfalls möglich
 ```
 
 Die Vorlage enthält folgende Tabellenblätter:
@@ -254,13 +275,22 @@ Die Vorlage enthält folgende Tabellenblätter:
 |-------|--------|
 | Zeitraster | Slot-Nummern, Uhrzeiten, Sek-II-only-Flag |
 | Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden |
+| Fächer | Fach-Kürzel, Name, Raumtyp |
 | Stundentafel | Jahrgang × Fach = Wochenstunden |
-| Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten |
+| Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten, individuelle Limits |
 | Fachräume | Raumtyp, Name, Anzahl |
 | Kopplungen | Jahrgang, Typ, Klassen, Gruppen, Stunden |
 
-Sperrzeiten-Format in der Lehrkräfte-Liste: `Mo1,Di3,Fr5`
-(Tag + Slot-Nummer, kommagetrennt)
+### Lehrkräfte-Spalten (v2.0)
+
+| Spalte | Format | Beschreibung |
+|--------|--------|--------------|
+| `Fächer (kommagetrennt)` | `Ma,De,En` | Unterrichtsfächer |
+| `Sperrslots (Tag:Slot,...)` | `Mo:3,Fr:6` | Feste Sperrzeiten |
+| `Wunsch-frei (Tage)` | `Fr Mo` | Bevorzugte freie Tage (weich) |
+| `Max Springstd/Woche` | Integer | Individuelles Springstunden-Limit |
+
+Sperrzeiten-Format alternativ: `Mo1,Di3,Fr5` (altes Format, weiterhin unterstützt).
 
 ---
 
@@ -270,10 +300,10 @@ Sperrzeiten-Format in der Lehrkräfte-Liste: `Mo1,Di3,Fr5`
 stundenplan/
 ├── config/          Konfigurationssystem (Pydantic + YAML + Wizard)
 ├── models/          Datenmodelle (Subject, Teacher, SchoolClass, ...)
-├── data/            Datengenerierung und Excel-Import
+├── data/            Datengenerierung, Excel-Import, Untis-Import
 ├── solver/          CP-SAT Solver, Pinning, Constraint-Relaxer
-├── analysis/        Validierung, Qualitätsbericht, Vertretungshelfer
-├── export/          Excel- und PDF-Export
+├── analysis/        Validierung, Qualitätsbericht, Diff, Vertretungshelfer
+├── export/          Excel-, PDF- und TUI-Export
 └── main.py          CLI (click)
 ```
 
@@ -294,7 +324,7 @@ stundenplan/
 | C11 | Kopplungen korrekt modelliert | Hart |
 | C12 | Doppelstunden nur in konfigurierten Blöcken | Hart |
 | C13 | Doppelstunden-Anzahl erfüllt | Hart |
-| C14 | Springstunden-Limit (optional) | Hart/Weich |
+| C14 | Springstunden-Limit pro Lehrer (individuell) | Hart/Weich |
 | S1 | Springstunden minimieren | Weich |
 | S2 | Gleichmäßige Tagesverteilung | Weich |
 | S3 | Wunsch-freie Tage honorieren | Weich |
@@ -332,8 +362,9 @@ Häufige Ursachen:
 ### Springstunden zu hoch
 
 - `weight_gaps` erhöhen (Standard: 200)
-- `max_gaps_per_week` in der Config setzen (Achtung: kann INFEASIBLE verursachen
-  wenn Religionslehrer viele Kopplungs-Slots haben)
+- `max_gaps_per_week` pro Lehrer in der Excel-Vorlage setzen (Spalte
+  `Max Springstd/Woche`)
+- Achtung: zu strenge individuelle Limits können INFEASIBLE verursachen
 
 ---
 
@@ -360,17 +391,10 @@ pytest -m slow                           # Nur der 36-Klassen-Test
 
 ---
 
-## v2 Roadmap
-
-### v2.0 — Infrastruktur
-- Per-Teacher Constraint Overrides (individuelle Limits)
-- Data Versioning / Audit Trail
-- Two-Pass Solver (schneller bei 36+ Klassen)
-- Interaktiver Terminal-Viewer
-- Untis-Import (`.gpn`-Format für Schulen mit Bestandsdaten)
-- Inkrementelles Re-Solving (Einzeländerung ohne Neustart)
+## Roadmap
 
 ### v2.1 — Oberstufe (Jg. 11–13)
+
 - Slots 8–10 aktivieren (`is_sek2_only: true` → genutzt)
 - Kurswahlsystem (LK/GK statt Klassen)
 - Schüler-Konflikt-Prüfung und Kursschienen
@@ -378,12 +402,10 @@ pytest -m slow                           # Nur der 36-Klassen-Test
 - A/B-Wochen-Rotation (alternierende Wochenpläne, v.a. Oberstufe)
 
 ### v2.2 — Erweiterte Features
+
 - Web-Interface
-- ~~Mehrere Schulformen (Realschule, Gesamtschule)~~ ✓ _seit v1.1: erweiterter SchoolType-Enum + importierbare Stundentafel_
-- ~~Vollständige Solver-integrierte Raumzuweisung~~ ✓ _seit v1.1: CP-SAT Second-Pass_
 - AG/Wahlunterricht (Nachmittag)
 - Jahresplanung und Änderungsmanagement
-- Plan-Diff (Vergleich zweier Lösungen für Jahr-zu-Jahr-Änderungen)
 
 ---
 

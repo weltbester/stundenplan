@@ -27,7 +27,7 @@ Verwendung:
   python main.py substitute --teacher T01 Vertretungsoptionen
 """
 
-__version__ = "1.1"
+__version__ = "2.0"
 
 import sys
 import logging

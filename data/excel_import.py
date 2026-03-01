@@ -191,15 +191,28 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
 
     # ── Blatt 2: Jahrgänge ────────────────────────────────────────────────────
     ws_jg = wb.create_sheet("Jahrgänge")
-    headers = ["Jahrgang", "Anzahl Klassen", "Soll-Stunden/Woche", "Klassen-Buchstaben"]
+    headers = [
+        "Jahrgang", "Anzahl Klassen", "Soll-Stunden/Woche",
+        "Klassen-Buchstaben", "Kurstyp (LK/GK)",
+    ]
     for col, h in enumerate(headers, 1):
         style_header(ws_jg.cell(row=1, column=col, value=h))
-    for w, width in zip(range(1, 5), [12, 16, 18, 24]):
+    for w, width in zip(range(1, 6), [12, 16, 18, 24, 16]):
         set_col_width(ws_jg, w, width)
+
+    dv_kurstyp = DataValidation(
+        type="list", formula1='"LK,GK"', allow_blank=True, showDropDown=False
+    )
+    dv_kurstyp.sqref = "E2:E200"
+    ws_jg.add_data_validation(dv_kurstyp)
 
     for r, gd in enumerate(config.grades.grades, 2):
         labels = gd.class_labels or list("abcdefghij"[:gd.num_classes])
-        row_vals = [gd.grade, gd.num_classes, gd.weekly_hours_target, ", ".join(labels)]
+        kurstyp_hint = "" if gd.grade < 11 else ""  # blank — user fills in LK/GK
+        row_vals = [
+            gd.grade, gd.num_classes, gd.weekly_hours_target,
+            ", ".join(labels), kurstyp_hint,
+        ]
         alt = (r % 2 == 0)
         for col, val in enumerate(row_vals, 1):
             style_data(ws_jg.cell(row=r, column=col, value=val), alt=alt)
@@ -292,11 +305,12 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
         "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
         "Sperrslots (Tag:Slot,...)", "Wunsch-frei (Tage)", "Max Springstd/Woche",
+        "Sek-II berechtigt",
     ]
     for col, h in enumerate(lk_headers, 1):
         style_header(ws_lk.cell(row=1, column=col, value=h))
 
-    widths_lk = [28, 10, 32, 10, 10, 26, 22, 12, 16, 22, 18, 18]
+    widths_lk = [28, 10, 32, 10, 10, 26, 22, 12, 16, 22, 18, 18, 16]
     for col, w in enumerate(widths_lk, 1):
         set_col_width(ws_lk, col, w)
 
@@ -304,7 +318,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     example_row = [
         "Müller, Hans", "MÜL", "Mathematik, Physik",
         26, "nein", "Mi5", "Fr", 6, 2,
-        "Mo:3,Fr:6", "Fr", 5,
+        "Mo:3,Fr:6", "Fr", 5, "ja",
     ]
     for col, val in enumerate(example_row, 1):
         style_example(ws_lk.cell(row=2, column=col, value=val))
@@ -342,6 +356,12 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     )
     dv_max_gw.sqref = "L3:L200"
     ws_lk.add_data_validation(dv_max_gw)
+
+    dv_sek2 = DataValidation(
+        type="list", formula1='"ja,nein"', allow_blank=True, showDropDown=False
+    )
+    dv_sek2.sqref = "M3:M200"
+    ws_lk.add_data_validation(dv_sek2)
 
     # ── Blatt 6: Fachräume ────────────────────────────────────────────────────
     ws_fr = wb.create_sheet("Fachräume")
@@ -383,6 +403,39 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     ]
     for col, val in enumerate(ex_kp, 1):
         style_example(ws_kp.cell(row=2, column=col, value=val))
+
+    # ── Blatt 8: Kursschienen (Oberstufe) ────────────────────────────────────
+    ws_ks = wb.create_sheet("Kursschienen")
+    ks_headers = ["ID", "Name", "Kurse (kommagetrennt)", "Stunden/Woche"]
+    for col, h in enumerate(ks_headers, 1):
+        style_header(ws_ks.cell(row=1, column=col, value=h))
+    for col, w in zip(range(1, 5), [14, 28, 42, 14]):
+        set_col_width(ws_ks, col, w)
+
+    # Hinweis (Zeile 2)
+    hint_cell = ws_ks.cell(
+        row=2, column=1,
+        value=(
+            "Optional — nur für Oberstufe. "
+            "Kurse in einer Kursschiene werden parallel geplant "
+            "(gleiche Stunden/Woche, identische Tag+Slot-Paare)."
+        ),
+    )
+    hint_cell.font = Font(italic=True, color="888888", size=10)
+    ws_ks.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+
+    # Beispielzeile (Zeile 3)
+    ex_ks = ["Q1-KS1", "Kursschiene 1 (Q1)", "Q1-LK-Ma,Q1-GK-De,Q1-GK-Bi", 3]
+    for col, val in enumerate(ex_ks, 1):
+        style_example(ws_ks.cell(row=3, column=col, value=val))
+
+    dv_ks_h = DataValidation(
+        type="whole", operator="between",
+        formula1="1", formula2="10",
+        allow_blank=True,
+    )
+    dv_ks_h.sqref = "D4:D200"
+    ws_ks.add_data_validation(dv_ks_h)
 
     # ── Speichern ─────────────────────────────────────────────────────────────
     path = Path(path)
@@ -783,6 +836,12 @@ class ExcelImporter:
             except ValueError:
                 max_gw = tc.max_gaps_per_week
 
+            # Sek-II berechtigt (optional, Standard: ja)
+            sek2_raw = row.get(
+                "sek-ii berechtigt", row.get("sek2 berechtigt", "ja")
+            ).strip().lower()
+            can_teach_sek2 = sek2_raw not in ("nein", "no", "false", "0")
+
             deputat_max = deputat + tc.deputat_max_buffer
             deputat_min = max(1, round(deputat_max * tc.deputat_min_fraction))
             teachers.append(Teacher(
@@ -797,6 +856,7 @@ class ExcelImporter:
                 max_hours_per_day=max_h,
                 max_gaps_per_day=max_g,
                 max_gaps_per_week=max_gw,
+                can_teach_sek2=can_teach_sek2,
             ))
 
         if not teachers:
@@ -859,6 +919,7 @@ class ExcelImporter:
         rows = self._sheet_rows(sheet)
         classes = []
         sek1_max = self.config.time_grid.sek1_max_slot
+        sek2_max = self.config.time_grid.sek2_max_slot
 
         for i, row in enumerate(rows, 2):
             grade_raw = row.get("jahrgang", "").strip()
@@ -885,6 +946,20 @@ class ExcelImporter:
                 if h > 0
             }
 
+            # Sek-II: Jahrgang ≥ 11 → Oberstufe-Kurse
+            is_course = grade >= 11
+            max_slot = sek2_max if is_course else sek1_max
+
+            # Optionaler Kurstyp (LK / GK) für Oberstufe-Jahrgänge
+            kurstyp_raw = row.get("kurstyp (lk/gk)", row.get("kurstyp", "")).strip().upper()
+            if kurstyp_raw and kurstyp_raw not in ("LK", "GK"):
+                self._warnings.append(
+                    f"Jahrgänge Zeile {i}: Ungültiger Kurstyp '{kurstyp_raw}' "
+                    f"(erwartet LK oder GK) → ignoriert"
+                )
+                kurstyp_raw = ""
+            course_type: Optional[str] = kurstyp_raw or None
+
             labels = list("abcdefghij"[:num_classes])
             for label in labels:
                 classes.append(SchoolClass(
@@ -892,7 +967,9 @@ class ExcelImporter:
                     grade=grade,
                     label=label,
                     curriculum=curriculum.copy(),
-                    max_slot=sek1_max,
+                    max_slot=max_slot,
+                    is_course=is_course,
+                    course_type=course_type,
                 ))
 
         return classes
@@ -961,6 +1038,54 @@ class ExcelImporter:
 
         return couplings
 
+    # ── Kursschienen ────────────────────────────────────────────────────────
+
+    def import_course_tracks(self) -> list:
+        """Importiert Kursschienen aus optionalem Blatt 'Kursschienen'.
+
+        Spalten: ID, Name, Kurse (kommagetrennt), Stunden/Woche
+        Gibt leere Liste zurück wenn das Blatt nicht vorhanden ist.
+        """
+        from models.course_track import CourseTrack
+
+        sheet = self._get_sheet("Kursschienen")
+        if sheet is None:
+            return []
+
+        rows = self._sheet_rows(sheet)
+        tracks = []
+        for i, row in enumerate(rows, 2):
+            track_id = row.get("id", "").strip()
+            if not track_id or track_id.lower().startswith("id"):
+                continue  # Header/Beispielzeile
+
+            name = row.get("name", "").strip() or track_id
+            courses_raw = row.get(
+                "kurse (kommagetrennt)", row.get("kurse", "")
+            ).strip()
+            hours_raw = row.get("stunden/woche", row.get("stunden", "2")).strip()
+
+            course_ids = [c.strip() for c in courses_raw.split(",") if c.strip()]
+            if not course_ids:
+                self._warnings.append(
+                    f"Kursschienen Zeile {i}: Keine Kurse für '{track_id}' → übersprungen"
+                )
+                continue
+
+            try:
+                hours = int(float(hours_raw)) if hours_raw else 2
+            except ValueError:
+                hours = 2
+
+            tracks.append(CourseTrack(
+                id=track_id,
+                name=name,
+                course_ids=course_ids,
+                hours_per_week=hours,
+            ))
+
+        return tracks
+
     # ── Vollständiger Import ───────────────────────────────────────────────
 
     def import_all(self) -> tuple[SchoolData, FeasibilityReport]:
@@ -1007,6 +1132,13 @@ class ExcelImporter:
             self._warnings.append(f"Kopplungen: {e}")
             couplings = []
 
+        # Kursschienen (optional — nur relevant bei Oberstufe)
+        try:
+            course_tracks = self.import_course_tracks()
+        except ExcelImportError as e:
+            self._warnings.append(f"Kursschienen: {e}")
+            course_tracks = []
+
         if self._errors:
             # Kritische Fehler: Report zurückgeben, kein SchoolData
             report = FeasibilityReport(
@@ -1025,6 +1157,7 @@ class ExcelImporter:
             classes=classes,
             teachers=teachers,
             couplings=couplings,
+            course_tracks=course_tracks,
             config=self.config,
         )
 

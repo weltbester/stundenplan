@@ -32,6 +32,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   identical (day, slot) combinations.
 - **`Teacher.available_slots_count(max_slot)`** — Replaces hardcoded Sek-I count in
   feasibility checks; defaults to 7 for backward compatibility.
+- **Excel import — Oberstufe support** (`data/excel_import.py`):
+  - `Lehrkräfte` sheet: new optional `Sek-II berechtigt` column (ja/nein, default ja)
+    → `Teacher.can_teach_sek2`; dropdown validation in template.
+  - `Jahrgänge` sheet: new optional `Kurstyp (LK/GK)` column; grade ≥ 11 rows are
+    automatically imported as `is_course=True` with `max_slot=sek2_max_slot`.
+  - New `import_course_tracks()` method reads optional `Kursschienen` sheet
+    (columns: `ID`, `Name`, `Kurse (kommagetrennt)`, `Stunden/Woche`) →
+    `list[CourseTrack]`; result passed to `SchoolData.course_tracks`.
+  - `generate_template()` adds the `Kursschienen` sheet (sheet 8) with hint and
+    example row.
+- **Sek-II solver tests** (`tests/test_solver.py`) — `TestOberstufeSekII` class with
+  5 tests: mixed-school feasibility, Sek-I slot boundary, `can_teach_sek2=False`
+  exclusion, C15 synchronisation, and feasibility capacity error reporting.
 
 ### Changed
 - Wizard intro no longer shows "Oberstufe folgt in v2" placeholder.
@@ -39,6 +52,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Teacher/class/room conflict constraints cover all slots including 8–10.
 - Gap penalty tracking uses all slots; Sek-I teachers are unaffected (no vars there).
 - Pin warning now reports `slot > cls.max_slot` instead of generic message.
+- Excel export: room-utilisation denominator in `_sheet_uebersicht()` uses
+  `sek2_max_slot` when Oberstufe courses are present (was always `sek1_max_slot`).
 
 ---
 

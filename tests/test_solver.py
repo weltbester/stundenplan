@@ -1276,3 +1276,147 @@ class TestIncrementalSolve:
         assert t_id in affected, (
             f"Lehrer {t_id} sollte als betroffen markiert sein"
         )
+
+
+# ─── OBERSTUFE (SEK II) ───────────────────────────────────────────────────────
+
+def make_sek2_school_data() -> SchoolData:
+    """Gemischte Schule: 2 Sek-I-Klassen (5a, 7a) + 2 Oberstufe-Kurse + 1 CourseTrack.
+
+    Q1-LK-Ma: 2h/Woche Mathematik (LK), max_slot=10
+    Q1-GK-De: 2h/Woche Deutsch (GK), max_slot=10
+    CourseTrack Q1-KS1: beide Kurse laufen synchron.
+    T11: can_teach_sek2=False – darf nicht in Oberstufe-Kursen erscheinen.
+    """
+    from models.course_track import CourseTrack
+
+    base = make_mini_school_data()
+    sek2_max = base.config.time_grid.sek2_max_slot  # 10
+
+    q1_lk_ma = SchoolClass(
+        id="Q1-LK-Ma", grade=12, label="LK-Ma",
+        is_course=True, course_type="LK",
+        curriculum={"Mathematik": 2},
+        max_slot=sek2_max,
+    )
+    q1_gk_de = SchoolClass(
+        id="Q1-GK-De", grade=12, label="GK-De",
+        is_course=True, course_type="GK",
+        curriculum={"Deutsch": 2},
+        max_slot=sek2_max,
+    )
+    track = CourseTrack(
+        id="Q1-KS1",
+        name="Kursschiene 1 (Q1)",
+        course_ids=["Q1-LK-Ma", "Q1-GK-De"],
+        hours_per_week=2,
+    )
+
+    # Lehrer mit Sek-I-only-Flag – darf nicht in Kursen eingesetzt werden
+    t11 = Teacher(
+        id="T11", name="Erstbach, Sek1",
+        subjects=["Mathematik"],
+        deputat_max=9, deputat_min=4,
+        max_hours_per_day=6, max_gaps_per_day=2,
+        can_teach_sek2=False,
+    )
+
+    return SchoolData(
+        subjects=base.subjects,
+        rooms=base.rooms,
+        classes=base.classes + [q1_lk_ma, q1_gk_de],
+        teachers=base.teachers + [t11],
+        couplings=base.couplings,
+        course_tracks=[track],
+        config=base.config,
+    )
+
+
+class TestOberstufeSekII:
+    """Oberstufe (Sek-II) Support: per-class Slots, CourseTrack C15."""
+
+    @pytest.fixture(scope="class")
+    def sek2_data(self):
+        return make_sek2_school_data()
+
+    @pytest.fixture(scope="class")
+    def sek2_solution(self, sek2_data):
+        solver = ScheduleSolver(sek2_data)
+        return solver.solve(use_soft=False)
+
+    def test_mixed_school_feasible(self, sek2_solution):
+        """Gemischte Sek-I/II-Schule findet FEASIBLE oder OPTIMAL."""
+        assert sek2_solution.solver_status in ("OPTIMAL", "FEASIBLE"), (
+            f"Gemischte Schule nicht lösbar: {sek2_solution.solver_status}"
+        )
+
+    def test_sek1_classes_within_sek1_slots(self, sek2_data, sek2_solution):
+        """Sek-I-Klassen haben keine Einträge in Slots 8–10."""
+        if sek2_solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Kein FEASIBLE")
+
+        sek1_ids = {c.id for c in sek2_data.classes if not c.is_course}
+        sek1_max = sek2_data.config.time_grid.sek1_max_slot
+        for entry in sek2_solution.entries:
+            if entry.class_id in sek1_ids:
+                assert entry.slot_number <= sek1_max, (
+                    f"Sek-I-Klasse {entry.class_id} in Slot {entry.slot_number} "
+                    f"(> sek1_max={sek1_max})"
+                )
+
+    def test_sek1only_teacher_not_in_courses(self, sek2_data, sek2_solution):
+        """Lehrer mit can_teach_sek2=False dürfen nicht in Oberstufe-Kursen erscheinen."""
+        if sek2_solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Kein FEASIBLE")
+
+        sek1_only = {t.id for t in sek2_data.teachers if not t.can_teach_sek2}
+        course_ids = {c.id for c in sek2_data.classes if c.is_course}
+        for entry in sek2_solution.entries:
+            if entry.class_id in course_ids:
+                assert entry.teacher_id not in sek1_only, (
+                    f"Sek-I-only-Lehrer {entry.teacher_id} unterrichtet "
+                    f"Oberstufe-Kurs {entry.class_id}"
+                )
+
+    def test_course_track_synchronisation(self, sek2_data, sek2_solution):
+        """C15: Kurse in der gleichen Kursschiene teilen identische (day, slot)-Paare."""
+        if sek2_solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+            pytest.skip("Kein FEASIBLE")
+
+        for track in sek2_data.course_tracks:
+            slots_per_course: dict[str, set[tuple[int, int]]] = {}
+            for cid in track.course_ids:
+                slots_per_course[cid] = {
+                    (e.day, e.slot_number)
+                    for e in sek2_solution.entries
+                    if e.class_id == cid and not e.is_coupling
+                }
+            slot_sets = list(slots_per_course.values())
+            if len(slot_sets) < 2:
+                continue
+            ref = slot_sets[0]
+            for cid, s in zip(track.course_ids[1:], slot_sets[1:]):
+                assert ref == s, (
+                    f"CourseTrack '{track.id}': "
+                    f"{track.course_ids[0]} → {sorted(ref)}, "
+                    f"{cid} → {sorted(s)}"
+                )
+
+    def test_validate_feasibility_sek2_capacity_error(self, sek2_data):
+        """validate_feasibility meldet Fehler wenn kein Sek-II-fähiger Lehrer für ein Fach."""
+        # Alle Mathematik-Lehrer auf can_teach_sek2=False setzen
+        teachers_no_ma = [
+            t.model_copy(update={"can_teach_sek2": False})
+            if "Mathematik" in t.subjects else t
+            for t in sek2_data.teachers
+        ]
+        restricted = sek2_data.model_copy(update={"teachers": teachers_no_ma})
+        report = restricted.validate_feasibility()
+        sek2_errors = [
+            e for e in report.errors
+            if "Sek-II" in e and "Mathematik" in e
+        ]
+        assert sek2_errors, (
+            "validate_feasibility sollte Sek-II-Kapazitätsfehler für "
+            "Mathematik melden, wenn kein can_teach_sek2=True-Lehrer verfügbar"
+        )

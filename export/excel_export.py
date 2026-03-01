@@ -295,7 +295,12 @@ class ExcelExporter:
             c.border = border
         row += 1
 
-        max_slots = self.tg.sek1_max_slot * self.tg.days_per_week
+        school_max_slot = (
+            self.tg.sek2_max_slot
+            if any(c.is_course for c in self.data.classes)
+            else self.tg.sek1_max_slot
+        )
+        max_slots = school_max_slot * self.tg.days_per_week
         # De-duplizieren nach (room, day, slot) – Kopplungsstunden zählen einmal,
         # auch wenn sie für mehrere Klassen als Eintrag erscheinen.
         seen_room_slots: set[tuple] = set()

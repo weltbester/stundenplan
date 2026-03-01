@@ -1,6 +1,6 @@
 # Stundenplan-Generator
 
-Automatischer Stundenplan-Generator für deutsche Schulen (Sekundarstufe I).
+Automatischer Stundenplan-Generator für deutsche Schulen (Sekundarstufe I + II).
 Löst die Stundenzuweisung als Constraint-Satisfaction-Problem mit Google OR-Tools CP-SAT.
 
 ## Features
@@ -9,6 +9,8 @@ Löst die Stundenzuweisung als Constraint-Satisfaction-Problem mit Google OR-Too
   Kopplungen und Solver-Gewichte — alles über YAML oder einen interaktiven Wizard.
 - **Solver-basierte Lehrerzuweisung**: Welcher Lehrer welche Klasse unterrichtet,
   wird gemeinsam mit der Stundenzuweisung optimiert.
+- **Oberstufe (Sek II)**: LK/GK-Kurse für EF/Q1/Q2 als eigenständige Objekte;
+  Slots 8–10 aktiv; Kursschienen (parallele Kurse laufen synchron).
 - **Doppelstunden**: Pflicht- und optionale Doppelstunden, nur in konfigurierten
   Blöcken (nie über Pausen hinweg).
 - **Klassenübergreifende Kopplungen**: Religion/Ethik und Wahlpflichtfächer (WPF)
@@ -97,6 +99,7 @@ python main.py config edit             # Konfiguration interaktiv bearbeiten
 python main.py generate                # Realistische Testdaten erzeugen
 python main.py generate --export-json  # Testdaten + JSON speichern
 python main.py generate --seed 123     # Reproduzierbare Daten (Seed)
+python main.py generate --oberstufe    # + Oberstufen-Kurse (EF/Q1/Q2, Jg. 11–13)
 
 python main.py template                # Excel-Import-Vorlage erzeugen
 python main.py import lehrkraefte.xlsx # Echte Schuldaten aus Excel importieren
@@ -140,6 +143,7 @@ python main.py export --output-dir mein_ordner/
 ```bash
 python main.py show 5a                 # Stundenplan Klasse 5a
 python main.py show 10c                # Stundenplan Klasse 10c
+python main.py show Q1-LK-Ma           # Stundenplan Oberstufen-Kurs
 python main.py show MÜL                # Stundenplan Lehrer MÜL
 python main.py browse                  # Interaktiver TUI-Browser
 ```
@@ -205,6 +209,10 @@ time_grid:
     - {slot_number: 2, start_time: "08:25", end_time: "09:10"}
     # ...
     - {slot_number: 7, start_time: "13:15", end_time: "14:00"}
+    # Sek-II-Slots (nur für Oberstufen-Kurse):
+    - {slot_number: 8,  start_time: "14:00", end_time: "14:45", is_sek2_only: true}
+    - {slot_number: 9,  start_time: "14:45", end_time: "15:30", is_sek2_only: true}
+    - {slot_number: 10, start_time: "15:30", end_time: "16:15", is_sek2_only: true}
 
   pauses:
     - {after_slot: 2, duration_minutes: 20, label: "Pause"}
@@ -216,8 +224,10 @@ time_grid:
     - {slot_first: 1, slot_second: 2}
     - {slot_first: 3, slot_second: 4}
     - {slot_first: 5, slot_second: 6}
+    - {slot_first: 9, slot_second: 10}   # Sek-II-Block
 
-  sek1_max_slot: 7     # Letzte Stunde für Sek-I-Klassen
+  sek1_max_slot: 7   # Letzte Stunde für Sek-I-Klassen
+  sek2_max_slot: 10  # Letzte Stunde für Oberstufen-Kurse
   min_hours_per_day: 5
 ```
 
@@ -230,6 +240,10 @@ grades:
     - {grade: 6,  num_classes: 6, weekly_hours_target: 31}
     # ...
     - {grade: 10, num_classes: 6, weekly_hours_target: 34}
+    # Oberstufe (optional):
+    - {grade: 11, num_classes: 2, weekly_hours_target: 32}  # EF
+    - {grade: 12, num_classes: 2, weekly_hours_target: 34}  # Q1
+    - {grade: 13, num_classes: 2, weekly_hours_target: 34}  # Q2
 ```
 
 ### Lehrkräfte
@@ -259,6 +273,53 @@ solver:
 
 ---
 
+## Oberstufen-Modell (Sek II)
+
+### Kurse als SchoolClass-Objekte
+
+Oberstufen-LK und GK werden als `SchoolClass`-Objekte mit zwei zusätzlichen
+Feldern modelliert:
+
+| Feld | Typ | Bedeutung |
+|------|-----|-----------|
+| `is_course` | `bool` | `True` für LK/GK-Kurse (Standard: `False`) |
+| `course_type` | `str \| None` | `"LK"`, `"GK"` oder `None` für Klassen |
+
+Kurse verwenden `max_slot = sek2_max_slot` (Standard: 10) statt `sek1_max_slot`.
+Der Kompaktheitszwang (keine Lücken im Tagesplan) gilt für Kurse **nicht** —
+Freistunden sind im Oberstufen-Kursmodell strukturell vorgesehen.
+
+### Kursschienen (CourseTrack)
+
+Kurse in derselben Schiene laufen immer an identischen (Tag, Stunde)-Kombinationen.
+Schüler wählen genau einen Kurs pro Schiene — der Solver erzwingt Parallelität
+ohne individuelle Schüler-Konfliktverfolgung (Constraint C15).
+
+```python
+CourseTrack(
+    id="Q1-KS-LK",
+    name="LK-Schiene (Q1)",
+    course_ids=["Q1-LK-Ma", "Q1-LK-De"],
+    hours_per_week=5,
+)
+```
+
+### Sek-II-Berechtigung für Lehrkräfte
+
+Lehrkräfte können mit `can_teach_sek2=False` als Sek-I-only markiert werden.
+Der Solver weist ihnen keine Oberstufen-Kurse zu. Standard ist `True`.
+
+### Smoke-Test
+
+```bash
+python main.py generate --oberstufe --export-json
+python main.py validate
+python main.py solve --small
+python main.py show Q1-LK-Ma
+```
+
+---
+
 ## Excel-Import
 
 Vorlage erzeugen und ausfüllen:
@@ -281,7 +342,7 @@ Die Vorlage enthält folgende Tabellenblätter:
 | Fachräume | Raumtyp, Name, Anzahl |
 | Kopplungen | Jahrgang, Typ, Klassen, Gruppen, Stunden |
 
-### Lehrkräfte-Spalten (v2.0)
+### Lehrkräfte-Spalten
 
 | Spalte | Format | Beschreibung |
 |--------|--------|--------------|
@@ -289,6 +350,7 @@ Die Vorlage enthält folgende Tabellenblätter:
 | `Sperrslots (Tag:Slot,...)` | `Mo:3,Fr:6` | Feste Sperrzeiten |
 | `Wunsch-frei (Tage)` | `Fr Mo` | Bevorzugte freie Tage (weich) |
 | `Max Springstd/Woche` | Integer | Individuelles Springstunden-Limit |
+| `Sek-II berechtigt` | `ja` / `nein` | Oberstufen-Einsatz erlaubt (Standard: ja) |
 
 Sperrzeiten-Format alternativ: `Mo1,Di3,Fr5` (altes Format, weiterhin unterstützt).
 
@@ -299,7 +361,7 @@ Sperrzeiten-Format alternativ: `Mo1,Di3,Fr5` (altes Format, weiterhin unterstüt
 ```
 stundenplan/
 ├── config/          Konfigurationssystem (Pydantic + YAML + Wizard)
-├── models/          Datenmodelle (Subject, Teacher, SchoolClass, ...)
+├── models/          Datenmodelle (Subject, Teacher, SchoolClass, CourseTrack, ...)
 ├── data/            Datengenerierung, Excel-Import, Untis-Import
 ├── solver/          CP-SAT Solver, Pinning, Constraint-Relaxer
 ├── analysis/        Validierung, Qualitätsbericht, Diff, Vertretungshelfer
@@ -319,12 +381,13 @@ stundenplan/
 | C6 | Lehrer-Verfügbarkeit (Sperrzeiten) | Hart |
 | C7 | Deputat-Grenzen (min/max) | Hart |
 | C8 | Fachraum-Kapazität | Hart |
-| C9 | Kompakter Klassenplan (keine Lücken) | Hart |
+| C9 | Kompakter Klassenplan (keine Lücken; Kurse ausgenommen) | Hart |
 | C10 | Max Stunden/Tag (Lehrer) | Hart |
 | C11 | Kopplungen korrekt modelliert | Hart |
 | C12 | Doppelstunden nur in konfigurierten Blöcken | Hart |
 | C13 | Doppelstunden-Anzahl erfüllt | Hart |
 | C14 | Springstunden-Limit pro Lehrer (individuell) | Hart/Weich |
+| C15 | Kursschienen: parallele Kurse synchron | Hart |
 | S1 | Springstunden minimieren | Weich |
 | S2 | Gleichmäßige Tagesverteilung | Weich |
 | S3 | Wunsch-freie Tage honorieren | Weich |
@@ -352,6 +415,7 @@ Häufige Ursachen:
 - **Deputat-Grenzen zu eng**: `deputat_min_fraction` zu hoch (empfohlen: 0.50).
 - **Fachraum-Engpass**: Mehr gleichzeitige Kurse als Räume verfügbar.
 - **Kopplungs-Konflikte**: Zu viele Klassen gleichzeitig im Kopplungs-Slot gebunden.
+- **Sek-II-Kapazität**: Zu wenige `can_teach_sek2=True`-Lehrkräfte für ein Fach.
 
 ### Solver findet keine gute Lösung (schlechte Qualität)
 
@@ -393,16 +457,9 @@ pytest -m slow                           # Nur der 36-Klassen-Test
 
 ## Roadmap
 
-### v2.1 — Oberstufe (Jg. 11–13)
-
-- Slots 8–10 aktivieren (`is_sek2_only: true` → genutzt)
-- Kurswahlsystem (LK/GK statt Klassen)
-- Schüler-Konflikt-Prüfung und Kursschienen
-- Integration mit Sek-I-Solver (gemeinsame Lehrer)
-- A/B-Wochen-Rotation (alternierende Wochenpläne, v.a. Oberstufe)
-
 ### v2.2 — Erweiterte Features
 
+- A/B-Wochen-Rotation (alternierende Wochenpläne, v.a. Oberstufe)
 - Web-Interface
 - AG/Wahlunterricht (Nachmittag)
 - Jahresplanung und Änderungsmanagement

@@ -35,7 +35,7 @@ class TestDefaultConfig:
         assert tg.days_per_week == 5
         assert len(tg.lesson_slots) == 10
         assert len(tg.pauses) == 3
-        assert len(tg.double_blocks) == 3
+        assert len(tg.double_blocks) == 4  # 1-2, 3-4, 5-6, 9-10 (Sek II)
 
     def test_default_grades_valid(self):
         """Default-Jahrgangskonfiguration ist korrekt."""

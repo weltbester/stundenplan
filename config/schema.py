@@ -76,6 +76,9 @@ class TimeGridConfig(BaseModel):
     # Letzte Stunde für Sek-I-Klassen
     sek1_max_slot: int = Field(7,
         description="Letzte Stunde für Sek-I-Klassen")
+    # Letzte Stunde für Sek-II-Kurse (Oberstufe)
+    sek2_max_slot: int = Field(10,
+        description="Letzte Stunde für Sek-II-Kurse (Oberstufe)")
     # Minimale Stunden pro Tag für Klassen
     min_hours_per_day: int = Field(5, ge=3, le=8,
         description="Minimale Stunden pro Tag für Klassen")

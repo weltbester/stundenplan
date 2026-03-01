@@ -27,7 +27,7 @@ Verwendung:
   python main.py substitute --teacher T01 Vertretungsoptionen
 """
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import sys
 import logging
@@ -336,7 +336,12 @@ def config_edit():
               help="Pfad für JSON-Export.")
 @click.option("--validate", "run_validate", is_flag=True, default=True,
               help="Machbarkeits-Check nach Generierung.")
-def cmd_generate(seed: int, export_json: bool, json_path: str, run_validate: bool):
+@click.option("--oberstufe", is_flag=True, default=False,
+              help="Oberstufen-Kurse (EF/Q1/Q2, Jg. 11–13) hinzufügen.")
+def cmd_generate(
+    seed: int, export_json: bool, json_path: str,
+    run_validate: bool, oberstufe: bool,
+):
     """[bold]Erzeugt realistische Testdaten[/bold] (Lehrkräfte, Klassen, Räume, Kopplungen).
 
     Enthält absichtliche Engpässe (Chemie-Mangel, Freitag-Cluster,
@@ -347,7 +352,11 @@ def cmd_generate(seed: int, export_json: bool, json_path: str, run_validate: boo
 
     console.print("[bold]Testdaten werden generiert...[/bold]")
     gen = FakeDataGenerator(config, seed=seed)
-    data = gen.generate()
+    data = gen.generate(oberstufe=oberstufe)
+    if oberstufe:
+        n_courses = sum(1 for c in data.classes if c.is_course)
+        console.print(f"[cyan]Oberstufe:[/cyan] {n_courses} Kurse hinzugefügt "
+                      f"({len(data.course_tracks)} Kursschienen)")
     gen.print_summary(data)
 
     console.print(f"\n[dim]{data.summary()}[/dim]")

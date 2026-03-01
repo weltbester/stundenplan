@@ -17,6 +17,7 @@ class Teacher(BaseModel):
     max_hours_per_day: int = 6
     max_gaps_per_day: int = 2
     max_gaps_per_week: int = 5   # pro-Lehrer-Limit; 0 = kein Limit
+    can_teach_sek2: bool = True  # False = Sek-I only (kein Oberstufen-Einsatz)
 
     @property
     def deputat(self) -> int:
@@ -43,3 +44,7 @@ class Teacher(BaseModel):
         """Anzahl verfügbarer Sek-I-Slots (5 Tage × sek1_max_slot − Sperren)."""
         # Dieser Wert ist konfigurationsabhängig; Standardwert für 5×7
         return 35 - len(self.unavailable_slots)
+
+    def available_slots_count(self, max_slot: int = 7) -> int:
+        """Anzahl verfügbarer Slots für gegebenes max_slot (5 × max_slot − Sperren)."""
+        return (5 * max_slot) - len(self.unavailable_slots)

@@ -22,12 +22,17 @@ import string
 from typing import Optional
 
 from config.schema import SchoolConfig
-from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1, SUBJECT_METADATA
+from config.defaults import (
+    STUNDENTAFEL_GYMNASIUM_SEK1,
+    STUNDENTAFEL_OBERSTUFE_GYMNASIUM,
+    SUBJECT_METADATA,
+)
 from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.subject import Subject
 from models.room import Room
 from models.coupling import Coupling, CouplingGroup
+from models.course_track import CourseTrack
 from models.school_data import SchoolData
 
 # ─── Namens-Listen ────────────────────────────────────────────────────────────
@@ -193,6 +198,7 @@ class FakeDataGenerator:
         is_teilzeit: bool = False,
         preferred_free_days: Optional[list[int]] = None,
         unavailable_slots: Optional[list[tuple[int, int]]] = None,
+        can_teach_sek2: bool = True,
     ) -> Teacher:
         """Erstellt eine Lehrkraft mit zufälligem Namen."""
         first_names = _FIRST_NAMES_F if self.rng.random() < 0.55 else _FIRST_NAMES_M
@@ -214,6 +220,7 @@ class FakeDataGenerator:
             unavailable_slots=unavailable_slots or [],
             max_hours_per_day=tc.max_hours_per_day,
             max_gaps_per_day=tc.max_gaps_per_day,
+            can_teach_sek2=can_teach_sek2,
         )
 
     def _generate_teachers(self) -> list[Teacher]:
@@ -406,6 +413,80 @@ class FakeDataGenerator:
 
         return teachers
 
+    # ─── Oberstufen-Kurse ─────────────────────────────────────────────────────
+
+    def generate_oberstufe_courses(
+        self,
+    ) -> "tuple[list[SchoolClass], list[CourseTrack]]":
+        """Erzeugt Oberstufen-Kurse (LK/GK) für Jahrgänge 11–13.
+
+        Pro Jahrgang:
+          - 2 LK-Kurse (5h/Woche): Mathematik, Deutsch
+          - 4 GK-Kurse (3h/Woche): je nach Jahrgang
+
+        Gibt (courses, course_tracks) zurück.
+        Kursschienen verbinden immer LK1 und LK2 desselben Jahrgangs sowie
+        je ein GK-Paar.
+        """
+        sek2_max = self.config.time_grid.sek2_max_slot
+        grade_names = {11: "EF", 12: "Q1", 13: "Q2"}
+        courses: list[SchoolClass] = []
+        course_tracks: list[CourseTrack] = []
+
+        for grade, table in STUNDENTAFEL_OBERSTUFE_GYMNASIUM.items():
+            gname = grade_names.get(grade, str(grade))
+            lk_ids: list[str] = []
+            gk_ids: list[str] = []
+
+            for subj, hours in table.get("LK", {}).items():
+                short = subj[:2]
+                cid = f"{gname}-LK-{short}"
+                courses.append(SchoolClass(
+                    id=cid,
+                    grade=grade,
+                    label=f"LK-{short}",
+                    curriculum={subj: hours},
+                    max_slot=sek2_max,
+                    is_course=True,
+                    course_type="LK",
+                ))
+                lk_ids.append(cid)
+
+            for subj, hours in table.get("GK", {}).items():
+                short = subj[:2]
+                cid = f"{gname}-GK-{short}"
+                courses.append(SchoolClass(
+                    id=cid,
+                    grade=grade,
+                    label=f"GK-{short}",
+                    curriculum={subj: hours},
+                    max_slot=sek2_max,
+                    is_course=True,
+                    course_type="GK",
+                ))
+                gk_ids.append(cid)
+
+            # Kursschiene 1: beide LK-Kurse parallel
+            if len(lk_ids) >= 2:
+                course_tracks.append(CourseTrack(
+                    id=f"{gname}-KS-LK",
+                    name=f"LK-Schiene ({gname})",
+                    course_ids=lk_ids,
+                    hours_per_week=5,
+                ))
+
+            # Kursschienen 2+3: je zwei GK-Kurse parallel
+            for i in range(0, len(gk_ids) - 1, 2):
+                pair = gk_ids[i:i + 2]
+                course_tracks.append(CourseTrack(
+                    id=f"{gname}-KS-GK{i // 2 + 1}",
+                    name=f"GK-Schiene {i // 2 + 1} ({gname})",
+                    course_ids=pair,
+                    hours_per_week=3,
+                ))
+
+        return courses, course_tracks
+
     # ─── Kopplungen ───────────────────────────────────────────────────────────
 
     def _generate_couplings(self, classes: list[SchoolClass]) -> list[Coupling]:
@@ -479,19 +560,38 @@ class FakeDataGenerator:
 
     # ─── Vollständiger Datensatz ──────────────────────────────────────────────
 
-    def generate(self) -> SchoolData:
-        """Erzeugt den vollständigen Datensatz als SchoolData-Objekt."""
+    def generate(self, oberstufe: bool = False) -> SchoolData:
+        """Erzeugt den vollständigen Datensatz als SchoolData-Objekt.
+
+        Args:
+            oberstufe: True → Oberstufen-Kurse (EF/Q1/Q2) und Kursschienen
+                       hinzufügen.
+        """
         subjects = self._generate_subjects()
         rooms = self._generate_rooms()
         classes = self._generate_classes()
         teachers = self._generate_teachers()
         couplings = self._generate_couplings(classes)
+        course_tracks: list[CourseTrack] = []
+
+        if oberstufe:
+            ob_courses, course_tracks = self.generate_oberstufe_courses()
+            classes = classes + ob_courses
+            # ~15% der zufälligen Lehrer als Sek-I-only markieren
+            teachers = [
+                t.model_copy(update={"can_teach_sek2": False})
+                if (not t.can_teach_sek2 is False and self.rng.random() < 0.15)
+                else t
+                for t in teachers
+            ]
+
         return SchoolData(
             subjects=subjects,
             rooms=rooms,
             classes=classes,
             teachers=teachers,
             couplings=couplings,
+            course_tracks=course_tracks,
             config=self.config,
         )
 

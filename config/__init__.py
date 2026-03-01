@@ -17,8 +17,10 @@ from config.defaults import (
     default_school_config,
     default_time_grid,
     default_grades,
+    default_oberstufe_grades,
     default_rooms,
     STUNDENTAFEL_GYMNASIUM_SEK1,
+    STUNDENTAFEL_OBERSTUFE_GYMNASIUM,
     SUBJECT_METADATA,
 )
 from config.manager import ConfigManager
@@ -40,8 +42,10 @@ __all__ = [
     "default_school_config",
     "default_time_grid",
     "default_grades",
+    "default_oberstufe_grades",
     "default_rooms",
     "STUNDENTAFEL_GYMNASIUM_SEK1",
+    "STUNDENTAFEL_OBERSTUFE_GYMNASIUM",
     "SUBJECT_METADATA",
     "ConfigManager",
 ]

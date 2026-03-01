@@ -152,6 +152,7 @@ class ScheduleSolver:
 
         # Lookup-Strukturen (werden in _build_slot_index befüllt)
         self.sek1_slots: list = []         # LessonSlot-Objekte für Sek I
+        self.all_slots: list = []          # Alle LessonSlots inkl. Sek II
         self.slot_index: dict = {}         # (day, slot_number) -> int-Index
         self.valid_double_starts: set = {} # slot_numbers die Doppelstunden starten dürfen
 
@@ -448,6 +449,9 @@ class ScheduleSolver:
             if not s.is_sek2_only and s.slot_number <= tg.sek1_max_slot
         ]
 
+        # Alle Slots inkl. Sek-II (für Kurse und teacher-conflict-Checks)
+        self.all_slots = list(tg.lesson_slots)
+
         self.slot_index = {}
         for day in range(tg.days_per_week):
             for slot in self.sek1_slots:
@@ -455,10 +459,19 @@ class ScheduleSolver:
                 self.slot_index[key] = len(self.slot_index)
 
         # Welche slot_numbers dürfen Doppelstunden starten?
-        self.valid_double_starts = set()
-        for db in tg.double_blocks:
-            if db.slot_second <= tg.sek1_max_slot:
-                self.valid_double_starts.add(db.slot_first)
+        # Berücksichtigt Sek-II-Blöcke wenn Kurse in der Schule vorhanden sind.
+        max_slot_in_school = max(
+            (cls.max_slot for cls in self.data.classes),
+            default=tg.sek1_max_slot,
+        )
+        self.valid_double_starts = {
+            db.slot_first for db in tg.double_blocks
+            if db.slot_second <= max_slot_in_school
+        }
+
+    def _slots_for_class(self, cls) -> list:
+        """Per-Klasse Slot-Liste: Sek-I-Klassen nutzen 1..sek1_max, Kurse 1..max_slot."""
+        return [s for s in self.all_slots if s.slot_number <= cls.max_slot]
 
     def _build_coupling_coverage(self) -> None:
         """Bestimmt welche Fächer pro Klasse über Kopplungen abgedeckt werden."""
@@ -494,6 +507,7 @@ class ScheduleSolver:
 
         for cls in self.data.classes:
             coupled_subjects = self._coupling_covered.get(cls.id, set())
+            cls_slots = self._slots_for_class(cls)
 
             for subject, hours in cls.curriculum.items():
                 if hours == 0:
@@ -506,6 +520,10 @@ class ScheduleSolver:
                     continue
 
                 for teacher in qualified:
+                    # Sek-II-Berechtigung prüfen
+                    if cls.is_course and not teacher.can_teach_sek2:
+                        continue
+
                     # assign[t, c, s]
                     key = (teacher.id, cls.id, subject)
                     var = self._model.new_bool_var(f"assign_{teacher.id}_{cls.id}_{subject}")
@@ -513,7 +531,7 @@ class ScheduleSolver:
 
                     # slot[t, c, s, day, slot_nr]
                     for day in range(tg.days_per_week):
-                        for slot in self.sek1_slots:
+                        for slot in cls_slots:
                             skey = (teacher.id, cls.id, subject, day, slot.slot_number)
                             svar = self._model.new_bool_var(
                                 f"slot_{teacher.id}_{cls.id}_{subject}_{day}_{slot.slot_number}"
@@ -567,10 +585,10 @@ class ScheduleSolver:
             if m.get("double_required") or m.get("double_preferred")
         }
 
-        # double_pairs: slot_first -> slot_second
+        # double_pairs: slot_first -> slot_second (alle gültigen Blöcke inkl. Sek II)
         double_pairs: dict[int, int] = {}
         for db in tg.double_blocks:
-            if db.slot_second <= tg.sek1_max_slot:
+            if db.slot_first in self.valid_double_starts:
                 double_pairs[db.slot_first] = db.slot_second
 
         for (t, c, s) in self._assign:
@@ -604,6 +622,7 @@ class ScheduleSolver:
         self._c11_max_hours_per_day()
         self._c12_coupling_constraints()
         self._c13_pin_constraints()
+        self._c15_course_track_constraints()
         self._gap_vars = self._build_gap_vars()   # einmalig, für C14 + Soft
         self._c14_gap_limit()
         self._c14b_per_teacher_daily_gap_limit()
@@ -647,12 +666,12 @@ class ScheduleSolver:
                     self._model.add(sum(slot_vars) == hours)
 
     def _c4_no_teacher_conflict(self) -> None:
-        """Kein Lehrer doppelt belegt an einem Slot."""
+        """Kein Lehrer doppelt belegt an einem Slot (inkl. Sek-II-Slots)."""
         tg = self.config.time_grid
 
         for teacher in self.data.teachers:
             for day in range(tg.days_per_week):
-                for slot in self.sek1_slots:
+                for slot in self.all_slots:
                     h = slot.slot_number
                     # Reguläre Slot-Variablen dieses Lehrers an (day, h)
                     slot_vars = [
@@ -694,12 +713,12 @@ class ScheduleSolver:
                         self._model.add(sum(all_vars) <= 1)
 
     def _c5_no_class_conflict(self) -> None:
-        """Keine Klasse doppelt belegt an einem Slot."""
+        """Keine Klasse doppelt belegt an einem Slot (inkl. Sek-II-Slots)."""
         tg = self.config.time_grid
 
         for cls in self.data.classes:
             for day in range(tg.days_per_week):
-                for slot in self.sek1_slots:
+                for slot in self.all_slots:
                     h = slot.slot_number
                     # Reguläre Slots dieser Klasse
                     slot_vars = [
@@ -797,7 +816,7 @@ class ScheduleSolver:
                 coupling_room_types[coupling.id] = rtypes
 
         for day in range(tg.days_per_week):
-            for slot in self.sek1_slots:
+            for slot in self.all_slots:
                 h = slot.slot_number
                 # Gruppiere nach Raumtyp
                 by_room_type: dict[str, list] = {}
@@ -843,16 +862,16 @@ class ScheduleSolver:
             if meta.get("double_required")
         }
 
-        # Erste → zweite Slot-Nummer jedes Doppelstunden-Blocks
+        # Erste → zweite Slot-Nummer jedes Doppelstunden-Blocks (inkl. Sek-II-Blöcke)
         double_pairs: dict[int, int] = {}
         double_seconds: set[int] = set()
         for db in tg.double_blocks:
-            if db.slot_second <= tg.sek1_max_slot:
+            if db.slot_first in self.valid_double_starts:
                 double_pairs[db.slot_first] = db.slot_second
                 double_seconds.add(db.slot_second)
 
-        # Slot-Nummern die weder double_start noch double_second sind (z.B. Slot 7)
-        all_slot_numbers = {s.slot_number for s in self.sek1_slots}
+        # Slot-Nummern die weder double_start noch double_second sind (z.B. Slot 7, 8)
+        all_slot_numbers = {s.slot_number for s in self.all_slots}
         single_only_slots = all_slot_numbers - set(double_pairs.keys()) - double_seconds
 
         # Curriculum-Lookup: (class_id, subject) -> hours
@@ -914,7 +933,7 @@ class ScheduleSolver:
 
         double_pairs: dict[int, int] = {}
         for db in tg.double_blocks:
-            if db.slot_second <= tg.sek1_max_slot:
+            if db.slot_first in self.valid_double_starts:
                 double_pairs[db.slot_first] = db.slot_second
 
         for (t, c, s, day, bs), dvar in self._double.items():
@@ -934,13 +953,20 @@ class ScheduleSolver:
             self._model.add(slot_bs + slot_bs_next - 1 <= dvar)
 
     def _c10_compact_class_schedule(self) -> None:
-        """Keine Lücken im Stundenplan einer Klasse (Stunden sind kompakt)."""
+        """Keine Lücken im Stundenplan einer Klasse (Stunden sind kompakt).
+
+        Oberstufen-Kurse sind von dieser Regel ausgenommen — Freistunden sind
+        strukturell vorgesehen (Kursschienen-Modell).
+        """
         tg = self.config.time_grid
         days = tg.days_per_week
 
-        slot_numbers = sorted({s.slot_number for s in self.sek1_slots})
-
         for cls in self.data.classes:
+            if cls.is_course:
+                continue  # Oberstufen-Kurse: kein Kompaktheitszwang
+
+            slot_numbers = sorted({s.slot_number for s in self._slots_for_class(cls)})
+
             for day in range(days):
                 # class_active[c, day, h] = 1 wenn Klasse in diesem Slot eine Stunde hat
                 active: dict[int, cp_model.IntVar] = {}
@@ -996,7 +1022,7 @@ class ScheduleSolver:
                         ca_key = (coupling.id, g_idx, teacher.id)
                         if ca_key not in self._coupling_assign:
                             continue
-                        # Stunden dieser Kopplung an diesem Tag
+                        # Stunden dieser Kopplung an diesem Tag (Kopplungen immer Sek I)
                         for slot in self.sek1_slots:
                             cs_key = (coupling.id, day, slot.slot_number)
                             if cs_key in self._coupling_slot:
@@ -1058,18 +1084,87 @@ class ScheduleSolver:
                             # ca=1 → coupling_slot[k,d,h]=0
                             self._model.add_implication(ca, self._coupling_slot[cs_key].negated())
 
+    def _c15_course_track_constraints(self) -> None:
+        """C15: Kursschienen — Kurse in derselben Schiene laufen synchron.
+
+        Für jedes Kurs-Paar (c1, c2) in einer Kursschiene gilt:
+          active[c1][day][h] == active[c2][day][h]  ∀ (day, h)
+        d.h. beide Kurse finden immer an denselben (Tag, Stunde)-Paaren statt.
+        """
+        if not self.data.course_tracks:
+            return
+
+        tg = self.config.time_grid
+        course_map = {cls.id: cls for cls in self.data.classes}
+
+        for track in self.data.course_tracks:
+            # Welche Slots können diese Kurse haben?
+            track_courses = [
+                course_map[cid] for cid in track.course_ids
+                if cid in course_map
+            ]
+            if len(track_courses) < 2:
+                continue
+
+            max_slot = max(c.max_slot for c in track_courses)
+
+            for day in range(tg.days_per_week):
+                for h in range(1, max_slot + 1):
+                    # Für jeden Kurs: active[c][day][h] = 1 iff irgend ein
+                    # Lehrer an (day, h) für diesen Kurs eingeplant ist
+                    course_active: dict[str, object] = {}
+                    for cls in track_courses:
+                        busy_vars = [
+                            self._slot[key]
+                            for key in self._slot
+                            if key[1] == cls.id and key[3] == day and key[4] == h
+                        ]
+                        if busy_vars:
+                            a = self._model.new_bool_var(
+                                f"ctrack_{track.id}_{cls.id}_{day}_{h}"
+                            )
+                            self._model.add_bool_or(busy_vars).only_enforce_if(a)
+                            self._model.add(
+                                sum(busy_vars) == 0
+                            ).only_enforce_if(a.negated())
+                            course_active[cls.id] = a
+                        else:
+                            course_active[cls.id] = None
+
+                    # Alle Kurse mit Variablen müssen synchron sein
+                    active_vars = [
+                        (cid, v) for cid, v in course_active.items()
+                        if v is not None
+                    ]
+                    for i in range(len(active_vars) - 1):
+                        cid1, v1 = active_vars[i]
+                        cid2, v2 = active_vars[i + 1]
+                        # v1 == v2
+                        self._model.add(v1 == v2)
+
     def _c13_pin_constraints(self) -> None:
         """Gepinnte Stunden werden als harte Constraints gesetzt."""
+        tg = self.config.time_grid
+        cls_map = {cls.id: cls for cls in self.data.classes}
         for pin in self._pinned_lessons:
             key = (pin.teacher_id, pin.class_id, pin.subject, pin.day, pin.slot_number)
             if key in self._slot:
                 self._model.add(self._slot[key] == 1)
             else:
-                logger.warning(
-                    f"Pin ignoriert (Variable nicht vorhanden): "
-                    f"{pin.teacher_id} {pin.class_id} {pin.subject} "
-                    f"Tag={pin.day} Slot={pin.slot_number}"
-                )
+                # Warnung: prüfe ob Slot außerhalb des Klassen-max_slot liegt
+                cls = cls_map.get(pin.class_id)
+                cls_max = cls.max_slot if cls else tg.sek1_max_slot
+                if pin.slot_number > cls_max:
+                    logger.warning(
+                        f"Pin ignoriert: Slot {pin.slot_number} > max_slot "
+                        f"{cls_max} für Klasse {pin.class_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Pin ignoriert (Variable nicht vorhanden): "
+                        f"{pin.teacher_id} {pin.class_id} {pin.subject} "
+                        f"Tag={pin.day} Slot={pin.slot_number}"
+                    )
 
     # ─── Ergebnis-Extraktion ──────────────────────────────────────────────────
 
@@ -1497,7 +1592,7 @@ class ScheduleSolver:
         Wird einmalig in _add_constraints() aufgerufen und in self._gap_vars gecacht.
         """
         tg = self.config.time_grid
-        slot_numbers = sorted({s.slot_number for s in self.sek1_slots})
+        slot_numbers = sorted({s.slot_number for s in self.all_slots})
 
         # Vorberechnen: welche (coupling_id, g_idx) ist jeder Lehrer Kandidat für?
         teacher_coupling_groups: dict[str, list[tuple]] = {}

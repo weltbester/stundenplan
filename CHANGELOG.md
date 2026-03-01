@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.1] — 2026-03-01
+
+### Added
+- **Oberstufe (Sek II) — Slots 8–10 aktiv** — Per-class `max_slot` filtering
+  replaces the global `sek1_max_slot` ceiling; Sek-II courses may use slots 8–10.
+- **`SchoolClass.is_course` / `course_type`** — New fields model Oberstufe LK/GK
+  courses as `SchoolClass` objects (`is_course=True`, `course_type="LK"/"GK"`).
+- **`CourseTrack` model** (`models/course_track.py`) — Kursschienen enforce that
+  courses in the same lane are scheduled at identical (day, slot) pairs; enables
+  student-conflict avoidance without tracking individual students.
+- **`SchoolData.course_tracks`** — New field stores CourseTrack list; Solver
+  constraint C15 enforces synchronisation.
+- **`Teacher.can_teach_sek2`** — Boolean flag (default `True`) prevents Sek-I-only
+  contract staff from being assigned to Oberstufe courses.
+- **`TimeGridConfig.sek2_max_slot`** — New config field (default 10).
+- **`DoubleBlock(9, 10)`** — Default time grid now includes the Sek-II double block.
+- **`STUNDENTAFEL_OBERSTUFE_GYMNASIUM`** — NRW representative hour table for
+  EF/Q1/Q2 (LK 5h, GK 3h).
+- **`default_oberstufe_grades()`** — Helper returning grade definitions for Jg. 11–13.
+- **`generate --oberstufe`** — CLI flag adds EF/Q1/Q2 courses + CourseTrack objects
+  to the generated dataset.
+- **Feasibility check for Sek-II capacity** — `validate_feasibility()` reports
+  missing Sek-II-capable teachers per subject.
+- **Solver: C15 CourseTrack constraint** — Parallel courses in the same lane share
+  identical (day, slot) combinations.
+- **`Teacher.available_slots_count(max_slot)`** — Replaces hardcoded Sek-I count in
+  feasibility checks; defaults to 7 for backward compatibility.
+
+### Changed
+- Wizard intro no longer shows "Oberstufe folgt in v2" placeholder.
+- `_c10_compact_class_schedule` skips Oberstufe courses (Freistunden allowed).
+- Teacher/class/room conflict constraints cover all slots including 8–10.
+- Gap penalty tracking uses all slots; Sek-I teachers are unaffected (no vars there).
+- Pin warning now reports `slot > cls.max_slot` instead of generic message.
+
+---
+
 ## [2.0] — 2026-03-01
 
 ### Added

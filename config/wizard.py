@@ -418,12 +418,11 @@ def run_wizard() -> Optional[SchoolConfig]:
     console.print()
     console.print(Panel(
         "[bold]Willkommen beim Stundenplan-Generator![/bold]\n\n"
-        "Diese Version (v1) unterstützt die [cyan]Sekundarstufe I[/cyan] "
-        "(Jahrgänge 5–10).\n"
-        "Die Oberstufe (Jg. 11–13) folgt in v2.\n\n"
+        "Unterstützt [cyan]Sekundarstufe I[/cyan] (Jahrgänge 5–10) "
+        "und [cyan]Oberstufe[/cyan] (EF/Q1/Q2, Jahrgänge 11–13).\n\n"
         "Der Wizard führt Sie durch alle Konfigurationsbereiche.\n"
         "[dim]Standard-Werte können mit Enter übernommen werden.[/dim]",
-        title="[bold cyan]Stundenplan-Generator v1[/bold cyan]",
+        title="[bold cyan]Stundenplan-Generator[/bold cyan]",
         border_style="cyan",
     ))
 

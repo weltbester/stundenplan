@@ -62,9 +62,10 @@ def default_time_grid() -> TimeGridConfig:
             DoubleBlock(slot_first=3, slot_second=4),   # Block 3-4
             DoubleBlock(slot_first=5, slot_second=6),   # Block 5-6
             # Stunde 7 hat keinen Partner → keine Doppelstunde möglich
-            # Stunden 8-10 (SII): 9-10 wäre ein Block für v2
+            DoubleBlock(slot_first=9, slot_second=10),  # Block 9-10 (Sek II)
         ],
         sek1_max_slot=7,
+        sek2_max_slot=10,
         min_hours_per_day=5,
     )
 
@@ -79,6 +80,17 @@ def default_grades() -> GradeConfig:
             GradeDefinition(grade=8, num_classes=6, weekly_hours_target=32),
             GradeDefinition(grade=9, num_classes=6, weekly_hours_target=34),
             GradeDefinition(grade=10, num_classes=6, weekly_hours_target=34),
+        ]
+    )
+
+
+def default_oberstufe_grades() -> GradeConfig:
+    """Oberstufen-Jahrgänge: EF (11), Q1 (12), Q2 (13) mit je 2 Kursen."""
+    return GradeConfig(
+        grades=[
+            GradeDefinition(grade=11, num_classes=2, weekly_hours_target=32),
+            GradeDefinition(grade=12, num_classes=2, weekly_hours_target=34),
+            GradeDefinition(grade=13, num_classes=2, weekly_hours_target=34),
         ]
     )
 
@@ -238,6 +250,25 @@ STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
     },  # Summe: 34h (29h regular + 2h Reli-Kopplung + 3h WPF-Kopplung), 1 Slot frei
 }
 
+
+# ─── OBERSTUFEN-STUNDENTAFEL ───
+# LK: 5h/Woche, GK: 3h/Woche. Selbe Fächer wie Sek I → bestehende Lehrer deckend.
+# Jahrgang 11 = EF (Einführungsphase), 12 = Q1, 13 = Q2.
+
+STUNDENTAFEL_OBERSTUFE_GYMNASIUM: dict[int, dict[str, dict[str, int]]] = {
+    11: {  # EF
+        "LK": {"Mathematik": 5, "Deutsch": 5},
+        "GK": {"Englisch": 3, "Geschichte": 3, "Biologie": 3, "Sport": 3},
+    },
+    12: {  # Q1
+        "LK": {"Mathematik": 5, "Deutsch": 5},
+        "GK": {"Englisch": 3, "Geschichte": 3, "Chemie": 3, "Sport": 3},
+    },
+    13: {  # Q2
+        "LK": {"Mathematik": 5, "Deutsch": 5},
+        "GK": {"Englisch": 3, "Geschichte": 3, "Physik": 3, "Sport": 3},
+    },
+}
 
 # ─── FACH-METADATEN ───
 # Pro Fach: Kürzel, Kategorie, ob Hauptfach, benötigter Raumtyp,

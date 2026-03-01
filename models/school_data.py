@@ -12,6 +12,7 @@ from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.room import Room
 from models.coupling import Coupling
+from models.course_track import CourseTrack
 from config.schema import SchoolConfig
 
 
@@ -58,6 +59,7 @@ class SchoolData(BaseModel):
     teachers: list[Teacher]
     couplings: list[Coupling]
     config: SchoolConfig
+    course_tracks: list[CourseTrack] = []
     created_at: Optional[datetime] = None
     modified_at: Optional[datetime] = None
     data_version: str = "1.0"
@@ -103,7 +105,11 @@ class SchoolData(BaseModel):
         tg = self.config.time_grid
         sek1_max = tg.sek1_max_slot
         days = tg.days_per_week
-        total_slots_per_week = sek1_max * days  # z.B. 7 × 5 = 35
+
+        # Wenn Oberstufen-Kurse vorhanden, gelten mehr Slots
+        has_courses = any(c.is_course for c in self.classes)
+        school_max_slot = tg.sek2_max_slot if has_courses else sek1_max
+        total_slots_per_week = school_max_slot * days
 
         # Anzahl Doppelstunden-Blöcke pro Tag (für Fachraum-Check)
         double_blocks_per_day = len(tg.double_blocks)
@@ -141,7 +147,7 @@ class SchoolData(BaseModel):
         # ── 3. Jeder Lehrer: verfügbare Slots ≥ deputat_min ─────────────────
         # dep_max ist Obergrenze; Fehler nur wenn Minimum nicht erreichbar ist.
         for teacher in self.teachers:
-            available = total_slots_per_week - len(teacher.unavailable_slots)
+            available = teacher.available_slots_count(school_max_slot)
             if available < teacher.deputat_min:
                 errors.append(
                     f"Lehrkraft {teacher.id} ({teacher.name}): Nur {available} verfügbare Slots "
@@ -262,7 +268,7 @@ class SchoolData(BaseModel):
                     )
             else:
                 # Einzelstunden: Bedarf / (Räume × Tage) als Durchschnitt
-                max_per_week = room_count * sek1_max * days
+                max_per_week = room_count * school_max_slot * days
                 if need_hours > max_per_week:
                     errors.append(
                         f"Fachraum-Engpass '{subj_name}': {need_hours}h/Woche benötigt, "
@@ -277,6 +283,35 @@ class SchoolData(BaseModel):
                     errors.append(
                         f"Kopplung '{coupling.id}', Gruppe '{group.group_name}': "
                         f"Kein Lehrer für Fach '{group.subject}' vorhanden!"
+                    )
+
+        # ── 6. Sek-II Kurs-Kapazität ─────────────────────────────────────
+        if has_courses:
+            sek2_need: dict[str, int] = {}
+            for cls in self.classes:
+                if cls.is_course:
+                    for subj, hours in cls.curriculum.items():
+                        if hours > 0:
+                            sek2_need[subj] = sek2_need.get(subj, 0) + hours
+
+            sek2_capacity: dict[str, int] = {}
+            for teacher in self.teachers:
+                if not teacher.can_teach_sek2:
+                    continue
+                for subj in teacher.subjects:
+                    sek2_capacity[subj] = sek2_capacity.get(subj, 0) + teacher.deputat_max
+
+            for subj, need in sek2_need.items():
+                cap = sek2_capacity.get(subj, 0)
+                if cap == 0:
+                    errors.append(
+                        f"Sek-II: Fach '{subj}': Kein Sek-II-berechtigter Lehrer verfügbar "
+                        f"({need}h/Woche werden benötigt)."
+                    )
+                elif cap < need:
+                    errors.append(
+                        f"Sek-II: Fach '{subj}': Nur {cap}h Sek-II-Kapazität "
+                        f"bei {need}h Bedarf."
                     )
 
         return FeasibilityReport(

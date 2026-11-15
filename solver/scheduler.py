@@ -74,6 +74,23 @@ class ScheduleSolution(BaseModel):
         """Alle Einträge für einen bestimmten Lehrer."""
         return [e for e in self.entries if e.teacher_id == teacher_id]
 
+    def get_room_schedule(self, room_id: str) -> list[ScheduleEntry]:
+        """Alle Einträge für einen bestimmten Raum.
+
+        Sonderraum: entry.room == room_id.
+        Klassenraum: entry.home_room == room_id und entry.room is None.
+        """
+        result = []
+        for e in self.entries:
+            if e.room == room_id:
+                result.append(e)
+            elif e.room is None and e.home_room == room_id and not e.is_coupling:
+                # Coupling groups split into different rooms; the solver stores all
+                # groups with the same home_room, which would wrongly show them as
+                # simultaneous occupants. Exclude them from the classroom view.
+                result.append(e)
+        return result
+
     def save_json(self, path: Path) -> None:
         """Speichert die Lösung als JSON-Datei."""
         path = Path(path)

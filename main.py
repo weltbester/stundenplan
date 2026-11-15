@@ -23,6 +23,8 @@ Verwendung:
   python main.py scenario list            Szenarien auflisten
   python main.py show 5a                  Stundenplan Klasse 5a im Terminal
   python main.py show MÜL                 Stundenplan Lehrer MÜL im Terminal
+  python main.py show PH1                 Raumplan Sonderraum PH1 im Terminal
+  python main.py show 101                 Raumplan Klassenraum 101 im Terminal
   python main.py quality                  Qualitätsbericht anzeigen
   python main.py substitute --teacher T01 Vertretungsoptionen
 """
@@ -751,7 +753,11 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
         sys.exit(1)
 
     # ── Lösung speichern ─────────────────────────────────────────────────────
-    out_path = Path(output)
+    # --small writes to a separate file so it never clobbers the real solution.
+    if small and output == str(DEFAULT_SOLUTION_JSON):
+        out_path = Path("output/solution_small.json")
+    else:
+        out_path = Path(output)
     solution.save_json(out_path)
     console.print(f"[green]✓[/green] Lösung gespeichert: {out_path}")
 
@@ -1306,9 +1312,10 @@ def _subject_style(subject_name: str, subjects) -> str:
 def cmd_show(kennung: str, json_path: str, solution_path: str):
     """[bold]Zeigt einen Stundenplan im Terminal an.[/bold]
 
-    [bold magenta]KENNUNG[/bold magenta] ist entweder eine
-    [cyan]Klassen-ID[/cyan] (z.B. [bold]5a[/bold], [bold]10c[/bold])
-    oder ein [cyan]Lehrer-Kürzel[/cyan] (z.B. [bold]MÜL[/bold]).
+    [bold magenta]KENNUNG[/bold magenta] ist eine
+    [cyan]Klassen-ID[/cyan] (z.B. [bold]5a[/bold]),
+    ein [cyan]Lehrer-Kürzel[/cyan] (z.B. [bold]MÜL[/bold])
+    oder eine [cyan]Raum-ID[/cyan] (z.B. [bold]PH1[/bold], [bold]101[/bold]).
     Springstunden werden [red]rot[/red] hinterlegt.
     """
     from models.school_data import SchoolData
@@ -1332,9 +1339,11 @@ def cmd_show(kennung: str, json_path: str, solution_path: str):
     solution = ScheduleSolution.load_json(sol_path)
     config = solution.config_snapshot
 
-    # ── Identifiziere Modus: Klasse oder Lehrer? ─────────────────────────────
+    # ── Identifiziere Modus: Klasse, Lehrer oder Raum? ───────────────────────
     class_ids = {c.id for c in school_data.classes}
     teacher_ids = {t.id for t in school_data.teachers}
+    room_ids = {r.id for r in school_data.rooms}
+    home_room_ids = {c.home_room for c in school_data.classes if c.home_room}
 
     # Suche case-insensitive
     kennung_lower = kennung.lower()
@@ -1344,6 +1353,12 @@ def cmd_show(kennung: str, json_path: str, solution_path: str):
     matched_teacher = next(
         (tid for tid in teacher_ids if tid.lower() == kennung_lower), None
     )
+    matched_room = next(
+        (rid for rid in room_ids if rid.lower() == kennung_lower), None
+    )
+    matched_home_room = next(
+        (hr for hr in home_room_ids if hr.lower() == kennung_lower), None
+    ) if not matched_room else None
 
     if matched_class:
         _show_class_schedule(
@@ -1356,11 +1371,21 @@ def cmd_show(kennung: str, json_path: str, solution_path: str):
             build_time_grid_rows, count_gaps,
             count_teacher_actual_hours, LessonSlot, PauseSlot,
         )
+    elif matched_room or matched_home_room:
+        _show_room_schedule(
+            matched_room or matched_home_room,
+            solution, school_data, config,
+            build_time_grid_rows, get_coupling_label, LessonSlot, PauseSlot,
+            is_home_room=bool(matched_home_room),
+        )
     else:
+        sample_home = sorted(home_room_ids)[:6]
         console.print(
             f"[red]Kennung '[bold]{kennung}[/bold]' nicht gefunden.[/red]\n"
-            f"Gültige Klassen: {', '.join(sorted(class_ids)[:10])} ...\n"
-            f"Gültige Lehrer:  {', '.join(sorted(teacher_ids)[:10])} ..."
+            f"Gültige Klassen:      {', '.join(sorted(class_ids)[:10])} ...\n"
+            f"Gültige Lehrer:       {', '.join(sorted(teacher_ids)[:10])} ...\n"
+            f"Gültige Sonderräume:  {', '.join(sorted(room_ids)[:10])} ...\n"
+            f"Gültige Klassenräume: {', '.join(sample_home)} ..."
         )
         sys.exit(1)
 
@@ -1372,6 +1397,13 @@ def _show_class_schedule(
     """Zeigt den Stundenplan einer Klasse als rich-Tabelle."""
     cls = next(c for c in school_data.classes if c.id == class_id)
     entries = solution.get_class_schedule(class_id)
+    if not entries:
+        console.print(
+            f"[yellow]Keine Stunden für Klasse [bold]{class_id}[/bold] "
+            f"in der aktuellen Lösung.[/yellow]\n"
+            "[dim]Tipp: [bold]python main.py solve[/bold] ausführen.[/dim]"
+        )
+        return
 
     # Index: (day, slot_number) → entry
     slot_map: dict[tuple[int, int], object] = {}
@@ -1441,6 +1473,13 @@ def _show_teacher_schedule(
     """Zeigt den Stundenplan eines Lehrers als rich-Tabelle."""
     teacher = next(t for t in school_data.teachers if t.id == teacher_id)
     entries = solution.get_teacher_schedule(teacher_id)
+    if not entries:
+        console.print(
+            f"[yellow]Keine Stunden für Lehrer [bold]{teacher_id}[/bold] "
+            f"in der aktuellen Lösung.[/yellow]\n"
+            "[dim]Tipp: [bold]python main.py solve[/bold] ausführen.[/dim]"
+        )
+        return
 
     # Bestimme max genutzten Slot
     used_slots = [e.slot_number for e in entries]
@@ -1531,6 +1570,116 @@ def _show_teacher_schedule(
     console.print(
         f"[dim]Fächer: {subjects_str} | "
         f"{'Teilzeit' if teacher.is_teilzeit else 'Vollzeit'}[/dim]"
+    )
+
+
+def _show_room_schedule(
+    room_id, solution, school_data, config,
+    build_time_grid_rows, get_coupling_label, LessonSlot, PauseSlot,
+    is_home_room: bool = False,
+) -> None:
+    """Zeigt den Belegungsplan eines Raums als rich-Tabelle."""
+    from collections import defaultdict
+
+    entries = solution.get_room_schedule(room_id)
+
+    # (day, slot_number) → list of entries
+    slot_map: dict[tuple[int, int], list] = defaultdict(list)
+    for e in entries:
+        slot_map[(e.day, e.slot_number)].append(e)
+
+    day_names = config.time_grid.day_names
+    used_slots = [e.slot_number for e in entries]
+    max_slot = max(used_slots) if used_slots else config.time_grid.sek1_max_slot
+    time_rows = build_time_grid_rows(config, max_slot=max_slot)
+
+    if not entries:
+        console.print(
+            f"[yellow]Keine Stunden für Raum [bold]{room_id}[/bold] "
+            f"in der aktuellen Lösung.[/yellow]\n"
+            "[dim]Tipp: [bold]python main.py solve[/bold] ausführen.[/dim]"
+        )
+        return
+
+    if is_home_room:
+        owner = next(
+            (c.id for c in school_data.classes if c.home_room == room_id), None
+        )
+        owner_part = f" — Klasse {owner}" if owner else ""
+        title = f"Raumplan Klassenraum [bold]{room_id}[/bold]{owner_part}"
+    else:
+        room_obj = next((r for r in school_data.rooms if r.id == room_id), None)
+        room_name = room_obj.name if room_obj else room_id
+        title = f"Raumplan [bold]{room_id}[/bold] — {room_name}"
+
+    table = Table(
+        title=title,
+        box=box.ROUNDED,
+        show_lines=True,
+        header_style="bold white on blue",
+    )
+    table.add_column("Std.", width=5, justify="center")
+    table.add_column("Zeit", width=13, justify="center")
+    for d in day_names:
+        table.add_column(d, width=22, justify="center")
+
+    for row in time_rows:
+        if isinstance(row, PauseSlot):
+            table.add_row(
+                "—", row.label,
+                *["─" * 10] * len(day_names),
+                style="dim",
+            )
+            continue
+
+        slot = row
+        cells = []
+        for day_idx in range(len(day_names)):
+            slot_entries = slot_map.get((day_idx, slot.slot_number), [])
+            if not slot_entries:
+                cells.append("[dim]—[/dim]")
+            else:
+                # Group by (teacher_id, display_subject) to merge coupling classes
+                groups: dict[tuple[str, str], list[str]] = {}
+                orig_subjs: dict[tuple[str, str], str] = {}
+                for e in slot_entries:
+                    label = get_coupling_label(e, school_data)
+                    subj_disp = e.subject
+                    if label:
+                        subj_disp = f"{e.subject} ({label[:3].lower()}.)"
+                    key = (e.teacher_id, subj_disp)
+                    if key not in groups:
+                        groups[key] = []
+                        orig_subjs[key] = e.subject
+                    groups[key].append(e.class_id)
+                parts = []
+                for (tid, subj_disp), class_ids in groups.items():
+                    style = _subject_style(orig_subjs[(tid, subj_disp)],
+                                          school_data.subjects)
+                    classes_str = ", ".join(sorted(class_ids))
+                    parts.append(
+                        f"[{style}]{subj_disp}[/{style}]\n"
+                        f"[dim]{tid}[/dim] · [bold]{classes_str}[/bold]"
+                    )
+                cells.append("\n──\n".join(parts))
+
+        table.add_row(
+            str(slot.slot_number),
+            f"{slot.start_time}–{slot.end_time}",
+            *cells,
+        )
+
+    console.print(table)
+    lesson_slots = sum(1 for r in time_rows if isinstance(r, LessonSlot))
+    used = len({(e.day, e.slot_number) for e in entries})
+    coupling_note = (
+        " | [dim italic]Kopplungsstunden ausgeblendet[/dim italic]"
+        if is_home_room else ""
+    )
+    console.print(
+        f"[dim]Raum {room_id} | "
+        f"Auslastung: {used}/{lesson_slots * len(day_names)} Stunden"
+        f"{coupling_note}[/dim]"
     )
 
 

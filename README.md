@@ -291,9 +291,11 @@ Fach in dieser Klasse unterrichtet.
 
 Der Import meldet Fehler mit Zellbezug (z.B. `Unterrichtsverteilung B2
 (Klasse 5a, Fach Deutsch): Unbekanntes Kürzel 'XYZ'`). Der
-Machbarkeits-Check prüft zusätzlich: Deputat-Max und Sperrzeiten nicht
-überschritten, Deputat-Min noch erreichbar, genau eine Lehrkraft pro
-Klasse und Fach. Fachfremder Einsatz ist erlaubt und ergibt eine Warnung.
+Machbarkeits-Check prüft zusätzlich: Deputat-Max und unterrichtbare
+Stunden nicht überschritten (je Tag das Minimum aus Tagesmaximum und
+Stunden ohne Sperrzeit), Deputat-Min noch erreichbar, genau eine
+Lehrkraft pro Klasse und Fach. Fachfremder Einsatz ist erlaubt und
+ergibt eine Warnung.
 
 Eine ausgefüllte Vorlage aus vorhandenen Daten erzeugen (z.B. um die
 Verteilung eines berechneten Plans anzusehen, zu ändern und wieder zu

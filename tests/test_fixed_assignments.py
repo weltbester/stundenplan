@@ -132,6 +132,39 @@ class TestModel:
 
 # ─── Plausibilitätsprüfung ────────────────────────────────────────────────────
 
+class TestTeachableHours:
+    """Teacher.teachable_hours: Sperrzeiten und Tagesmaximum zusammen."""
+
+    DAYS = 5
+    SLOTS = 7
+
+    def _teacher(self, blocked: list[tuple[int, int]], per_day: int = 6):
+        template = make_mini_school_data().teachers[0]
+        return template.model_copy(update={
+            "unavailable_slots": blocked, "max_hours_per_day": per_day,
+        })
+
+    def test_without_blocks_daily_maximum_limits(self):
+        teacher = self._teacher([])
+        assert teacher.teachable_hours(self.DAYS, self.SLOTS) == 30
+
+    def test_fully_blocked_day_counts_zero(self):
+        blocked = [(0, slot) for slot in range(1, 8)]
+        teacher = self._teacher(blocked)
+        assert teacher.teachable_hours(self.DAYS, self.SLOTS) == 24
+
+    def test_partly_blocked_day_counts_free_slots(self):
+        """Mo 3 frei, Di–Do je 6 (Tagesmaximum), Fr gesperrt → 21."""
+        blocked = [(0, slot) for slot in range(4, 8)]
+        blocked += [(4, slot) for slot in range(1, 8)]
+        teacher = self._teacher(blocked)
+        assert teacher.teachable_hours(self.DAYS, self.SLOTS) == 21
+
+    def test_blocks_outside_the_grid_are_ignored(self):
+        teacher = self._teacher([(0, 9), (6, 1)], per_day=7)
+        assert teacher.teachable_hours(self.DAYS, self.SLOTS) == 35
+
+
 class TestFeasibilityCheck:
 
     def test_valid_assignment_adds_no_problem(self):
@@ -189,6 +222,26 @@ class TestFeasibilityCheck:
         data = data.model_copy(update={"teachers": teachers})
         report = _check([_fixed("5a", "Deutsch", "T01")], data)
         assert len(_matching(report.errors, "ohne Sperrzeit")) == 1
+
+    def test_more_than_daily_capacity_is_error(self):
+        """T01: 7 freie Stunden an einem Tag, aber höchstens 3h pro Tag.
+
+        4h Deutsch passen in die freien Stunden, nicht ins Tagesmaximum.
+        """
+        data = make_mini_school_data()
+        blocked = [(day, slot) for day in range(1, 5) for slot in range(1, 8)]
+        teachers = [
+            t.model_copy(update={
+                "unavailable_slots": blocked, "max_hours_per_day": 3,
+            })
+            if t.id == "T01" else t
+            for t in data.teachers
+        ]
+        data = data.model_copy(update={"teachers": teachers})
+        report = _check([_fixed("5a", "Deutsch", "T01")], data)
+        problems = _matching(report.errors, "ohne Sperrzeit")
+        assert len(problems) == 1
+        assert "4h fest" in problems[0] and "nur 3h" in problems[0]
 
     def test_unreachable_deputat_min_is_error(self):
         """Alle Deutsch-/Geschichtsstunden vergeben → T01 bleibt bei 0h."""

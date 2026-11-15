@@ -42,3 +42,20 @@ class Teacher(BaseModel):
         """Anzahl verfügbarer Sek-I-Slots (5 Tage × sek1_max_slot − Sperren)."""
         # Dieser Wert ist konfigurationsabhängig; Standardwert für 5×7
         return 35 - len(self.unavailable_slots)
+
+    def teachable_hours(self, days_per_week: int, slots_per_day: int) -> int:
+        """Höchstens unterrichtbare Wochenstunden dieser Lehrkraft.
+
+        Je Tag zählt das Minimum aus Tagesmaximum und Stunden ohne
+        Sperrzeit. Das ist schärfer als "Wochen-Slots minus Sperrzeiten":
+        freie Stunden über dem Tagesmaximum sind nicht nutzbar.
+        """
+        blocked = set(self.unavailable_slots)
+        total = 0
+        for day in range(days_per_week):
+            free = sum(
+                (day, slot) not in blocked
+                for slot in range(1, slots_per_day + 1)
+            )
+            total += min(self.max_hours_per_day, free)
+        return total

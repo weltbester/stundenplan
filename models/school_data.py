@@ -144,18 +144,24 @@ class SchoolData(BaseModel):
                 f"deputat_min_fraction senken oder Lehrerzahl reduzieren."
             )
 
-        # ── 3. Jeder Lehrer: verfügbare Slots ≥ deputat_min ─────────────────
+        # ── 3. Jeder Lehrer: unterrichtbare Stunden ≥ deputat_min ───────────
         # dep_max ist Obergrenze; Fehler nur wenn Minimum nicht erreichbar ist.
+        # Unterrichtbar = je Tag min(Tagesmaximum, Stunden ohne Sperrzeit).
         for teacher in self.teachers:
-            available = total_slots_per_week - len(teacher.unavailable_slots)
+            available = teacher.teachable_hours(days, sek1_max)
             if available < teacher.deputat_min:
                 errors.append(
-                    f"Lehrkraft {teacher.id} ({teacher.name}): Nur {available} verfügbare Slots "
-                    f"bei Deputat-Min {teacher.deputat_min}h. Sperrzeiten reduzieren oder Deputat anpassen."
+                    f"Lehrkraft {teacher.id} ({teacher.name}): Nur "
+                    f"{available} unterrichtbare Stunden (Sperrzeiten, "
+                    f"Tagesmaximum) bei Deputat-Min "
+                    f"{teacher.deputat_min}h. Sperrzeiten reduzieren "
+                    f"oder Deputat anpassen."
                 )
-            elif available < teacher.deputat_max:
+            elif available < teacher.deputat_max and teacher.unavailable_slots:
+                # Ohne Sperrzeiten begrenzt nur das Tagesmaximum: kein Hinweis.
                 warnings.append(
-                    f"Lehrkraft {teacher.id}: Deputat-Max ({teacher.deputat_max}h) > verfügbare Slots "
+                    f"Lehrkraft {teacher.id}: Deputat-Max "
+                    f"({teacher.deputat_max}h) > unterrichtbare Stunden "
                     f"({available}) – Solver weist max. {available}h zu."
                 )
 
@@ -288,7 +294,7 @@ class SchoolData(BaseModel):
         # ── 6. Vorgegebene Unterrichtsverteilung ─────────────────────────
         fixed_errors, fixed_warnings = check_fixed_assignments(
             self.fixed_assignments, self.classes, self.teachers,
-            self.couplings, total_slots_per_week,
+            self.couplings, days, sek1_max,
         )
         errors.extend(fixed_errors)
         warnings.extend(fixed_warnings)

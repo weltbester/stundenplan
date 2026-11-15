@@ -52,6 +52,11 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   übersprungen; die Beispielzeile wird am Präfix `Beispiel:` erkannt.
 - Excel-Vorlage: Das Blatt "Kopplungen" enthält alle Kopplungen laut
   Konfiguration statt nur einer Beispielzeile für Jahrgang 5.
+- Machbarkeits-Check: Die unterrichtbaren Stunden einer Lehrkraft
+  werden je Tag als Minimum aus Tagesmaximum und Stunden ohne
+  Sperrzeit gerechnet (bisher: Wochen-Slots minus Sperrzeiten). Zu
+  hohe Vorgaben oder ein zu hohes Deputat-Min fallen damit vor dem
+  Solver-Lauf auf statt als unerklärtes INFEASIBLE.
 - Validator meldete bei jedem Plan mit WPF-Kopplungen Fehlalarme
   (36-Klassen-Plan: 48 Fehler). Parallele Gruppen derselben Kopplung
   gelten nicht mehr als Klassen-Doppelbelegung, und WPF-Termine zählen

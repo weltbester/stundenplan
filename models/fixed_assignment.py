@@ -52,13 +52,15 @@ def check_fixed_assignments(
     classes: list[SchoolClass],
     teachers: list[Teacher],
     couplings: list[Coupling],
-    slots_per_week: int,
+    days_per_week: int,
+    slots_per_day: int,
 ) -> CheckResult:
     """Prüft die vorgegebene Unterrichtsverteilung vor dem Solver-Lauf.
 
     Fehler: unbekannte Klasse/Lehrkraft, Fach nicht in der Stundentafel der
     Klasse, Fach läuft über eine Kopplung, doppelte Vorgabe, Deputat-Max
-    oder verfügbare Slots überschritten, Deputat-Min nicht mehr erreichbar.
+    oder unterrichtbare Stunden (Sperrzeiten, Tagesmaximum) überschritten,
+    Deputat-Min nicht mehr erreichbar.
     Warnung: fachfremder Einsatz.
     """
     errors: list[str] = []
@@ -84,8 +86,9 @@ def check_fixed_assignments(
     fixed_load = _fixed_load(valid, couplings, class_map)
     open_hours = _open_hours_by_subject(valid, couplings, classes, covered)
     for teacher in teachers:
+        capacity = teacher.teachable_hours(days_per_week, slots_per_day)
         errors.extend(_load_problems(
-            teacher, fixed_load[teacher.id], open_hours, slots_per_week
+            teacher, fixed_load[teacher.id], open_hours, capacity
         ))
     return errors, warnings
 
@@ -215,20 +218,23 @@ def _load_problems(
     teacher: Teacher,
     fixed_hours: int,
     open_hours: Counter,
-    slots_per_week: int,
+    capacity: int,
 ) -> list[str]:
-    """Deputat- und Verfügbarkeits-Fehler einer Lehrkraft."""
+    """Deputat- und Verfügbarkeits-Fehler einer Lehrkraft.
+
+    `capacity` = unterrichtbare Wochenstunden (Teacher.teachable_hours).
+    """
     problems: list[str] = []
     if fixed_hours > teacher.deputat_max:
         problems.append(
             f"Lehrkraft {teacher.id}: {fixed_hours}h fest vorgegeben, "
             f"Deputat-Max ist {teacher.deputat_max}h."
         )
-    available = slots_per_week - len(teacher.unavailable_slots)
-    if fixed_hours > available:
+    if fixed_hours > capacity:
         problems.append(
             f"Lehrkraft {teacher.id}: {fixed_hours}h fest vorgegeben, "
-            f"aber nur {available} Stunden ohne Sperrzeit."
+            f"aber nur {capacity}h möglich (Stunden ohne Sperrzeit, "
+            f"höchstens {teacher.max_hours_per_day}h pro Tag)."
         )
     reachable = fixed_hours + sum(
         open_hours[subject] for subject in set(teacher.subjects)

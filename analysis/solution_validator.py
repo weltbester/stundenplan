@@ -128,15 +128,13 @@ class SolutionValidator:
     ) -> list[ValidationViolation]:
         """Eine Klasse darf pro Slot nur einen regulären Eintrag haben.
 
-        Kopplungen (reli_ethik) können mehrere Einträge pro Slot erzeugen –
-        das ist korrekt und wird hier nicht als Fehler gewertet.
+        Eine Kopplung (Reli/Ethik, WPF, ...) erzeugt pro Gruppe einen
+        Eintrag im selben Slot – das ist korrekt. Erlaubt sind mehrere
+        Einträge nur, wenn alle zur selben bekannten Kopplung gehören.
         """
         violations: list[ValidationViolation] = []
 
-        # Ermittle Kopplungen vom Typ reli_ethik
-        reli_coupling_ids: set[str] = {
-            c.id for c in school_data.couplings if c.coupling_type == "reli_ethik"
-        }
+        known_coupling_ids: set[str] = {c.id for c in school_data.couplings}
 
         by_slot: dict[tuple, list[ScheduleEntry]] = defaultdict(list)
         for e in solution.entries:
@@ -145,12 +143,14 @@ class SolutionValidator:
         for (class_id, day, slot), entries in by_slot.items():
             if len(entries) <= 1:
                 continue
-            # Alle Einträge aus reli_ethik-Kopplungen → erlaubt (mehrere Gruppen)
-            all_reli = all(
-                e.is_coupling and e.coupling_id in reli_coupling_ids
-                for e in entries
+            coupling_ids = {
+                e.coupling_id if e.is_coupling else None for e in entries
+            }
+            same_coupling = (
+                len(coupling_ids) == 1
+                and coupling_ids <= known_coupling_ids
             )
-            if not all_reli:
+            if not same_coupling:
                 subjects = [e.subject for e in entries]
                 violations.append(ValidationViolation(
                     severity="error",
@@ -197,20 +197,42 @@ class SolutionValidator:
     def _check_assignment_fulfillment(
         self, solution: ScheduleSolution, school_data: SchoolData
     ) -> list[ValidationViolation]:
-        """Prüft ob die Soll-Stunden pro Klasse/Fach eingehalten wurden."""
+        """Prüft ob die Soll-Stunden pro Klasse/Fach eingehalten wurden.
+
+        Ein Kopplungstermin zählt pro Klasse als eine Stunde und wird den
+        Stundentafel-Fächern gutgeschrieben, die die Kopplung abdeckt
+        (z.B. zählt eine WPF-Gruppe "Informatik" für das Fach "WPF").
+        """
         violations: list[ValidationViolation] = []
+
+        covered_by_coupling: dict[str, set[str]] = {
+            c.id: c.curriculum_subjects() for c in school_data.couplings
+        }
+        curriculum_by_class: dict[str, dict[str, int]] = {
+            cls.id: cls.curriculum for cls in school_data.classes
+        }
 
         # Tatsächliche Stunden: pro (class_id, subject) zählen
         actual: dict[tuple, int] = defaultdict(int)
         coupling_seen: set[tuple] = set()
 
         for e in solution.entries:
-            if e.is_coupling and e.coupling_id:
-                key = (e.class_id, e.coupling_id, e.day, e.slot_number)
-                if key in coupling_seen:
-                    continue
-                coupling_seen.add(key)
-            actual[(e.class_id, e.subject)] += 1
+            if not (e.is_coupling and e.coupling_id):
+                actual[(e.class_id, e.subject)] += 1
+                continue
+            key = (e.class_id, e.coupling_id, e.day, e.slot_number)
+            if key in coupling_seen:
+                continue
+            coupling_seen.add(key)
+            curriculum = curriculum_by_class.get(e.class_id, {})
+            covered = [
+                subject
+                for subject in covered_by_coupling.get(e.coupling_id, ())
+                if curriculum.get(subject, 0) > 0
+            ]
+            # Unbekannte Kopplung: wie bisher unter dem Eintragsfach zählen
+            for subject in covered or [e.subject]:
+                actual[(e.class_id, subject)] += 1
 
         # Erwartete Stunden aus Curriculum
         for cls in school_data.classes:

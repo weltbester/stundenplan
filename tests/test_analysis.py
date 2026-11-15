@@ -136,6 +136,74 @@ def _make_minimal_solution(config: SchoolConfig) -> ScheduleSolution:
     )
 
 
+WPF_CLASS_ID = "9a"
+WPF_COUPLING_ID = "wpf_9"
+WPF_HOURS = 3
+
+
+@pytest.fixture(scope="module")
+def wpf_school_data(mini_school_data: SchoolData) -> SchoolData:
+    """Mini-Datensatz plus Klasse 9a mit einer WPF-Kopplung (2 Gruppen)."""
+    wpf_class = SchoolClass(
+        id=WPF_CLASS_ID, grade=9, label="a",
+        curriculum={"WPF": WPF_HOURS},
+        max_slot=mini_school_data.config.time_grid.sek1_max_slot,
+    )
+    wpf_coupling = Coupling(
+        id=WPF_COUPLING_ID, coupling_type="wpf",
+        involved_class_ids=[WPF_CLASS_ID],
+        groups=[
+            CouplingGroup(group_name="Informatik-WPF",
+                          subject="Informatik", hours_per_week=WPF_HOURS),
+            CouplingGroup(group_name="Französisch-WPF",
+                          subject="Französisch", hours_per_week=WPF_HOURS),
+        ],
+        hours_per_week=WPF_HOURS,
+    )
+    return mini_school_data.model_copy(update={
+        "classes": mini_school_data.classes + [wpf_class],
+        "couplings": mini_school_data.couplings + [wpf_coupling],
+    })
+
+
+def _wpf_slot_entries(day: int, slot: int) -> list[ScheduleEntry]:
+    """Ein WPF-Termin der 9a: je ein Eintrag pro Gruppe im selben Slot."""
+    return [
+        ScheduleEntry(
+            day=day, slot_number=slot, teacher_id=teacher_id,
+            class_id=WPF_CLASS_ID, subject=subject,
+            is_coupling=True, coupling_id=WPF_COUPLING_ID,
+        )
+        for teacher_id, subject in (("T02", "Informatik"),
+                                    ("T03", "Französisch"))
+    ]
+
+
+def _solution_from(
+    entries: list[ScheduleEntry], config: SchoolConfig
+) -> ScheduleSolution:
+    """ScheduleSolution mit vorgegebenen Einträgen (ohne Solver)."""
+    return _make_minimal_solution(config).model_copy(
+        update={"entries": entries}
+    )
+
+
+class TestCouplingCurriculumSubjects:
+    """Coupling.curriculum_subjects(): welche Stundentafel-Fächer zählen."""
+
+    def test_wpf_coupling_covers_wpf(self, wpf_school_data):
+        wpf = next(
+            c for c in wpf_school_data.couplings if c.id == WPF_COUPLING_ID
+        )
+        assert wpf.curriculum_subjects() == {"WPF"}
+
+    def test_reli_coupling_covers_group_subjects(self, mini_school_data):
+        reli = next(
+            c for c in mini_school_data.couplings if c.id == "reli_5"
+        )
+        assert reli.curriculum_subjects() == {"Religion", "Ethik"}
+
+
 # ─── Tests: SolutionValidator ─────────────────────────────────────────────────
 
 class TestSolutionValidator:
@@ -266,6 +334,91 @@ class TestSolutionValidator:
         # coupling_inconsistency wird nicht ausgelöst, da nur 1 Klasse betroffen –
         # stattdessen prüfen wir dass die Validierung überhaupt läuft
         assert isinstance(report, ValidationReport)
+
+    def test_validator_wpf_parallel_groups_allowed(self, wpf_school_data):
+        """Parallele WPF-Gruppen im selben Slot sind keine Doppelbelegung."""
+        solution = _solution_from(
+            _wpf_slot_entries(day=1, slot=7), wpf_school_data.config
+        )
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "class_double_booking" not in constraints
+
+    def test_validator_wpf_hours_count_for_wpf_subject(
+        self, wpf_school_data
+    ):
+        """3 WPF-Kopplungstermine erfüllen 'WPF: 3h' der Stundentafel."""
+        entries = [
+            entry
+            for day in range(WPF_HOURS)
+            for entry in _wpf_slot_entries(day=day, slot=1)
+        ]
+        solution = _solution_from(entries, wpf_school_data.config)
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        wpf_class_mismatches = [
+            v for v in report.violations
+            if v.constraint == "assignment_mismatch"
+            and v.entity == WPF_CLASS_ID
+        ]
+        assert wpf_class_mismatches == []
+
+    def test_validator_wpf_missing_hour_is_reported(self, wpf_school_data):
+        """Nur 1 von 3 WPF-Terminen → assignment_mismatch für die Klasse."""
+        solution = _solution_from(
+            _wpf_slot_entries(day=0, slot=1), wpf_school_data.config
+        )
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        wpf_class_mismatches = [
+            v for v in report.violations
+            if v.constraint == "assignment_mismatch"
+            and v.entity == WPF_CLASS_ID
+        ]
+        assert len(wpf_class_mismatches) == 1
+        assert "WPF" in wpf_class_mismatches[0].description
+
+    def test_validator_two_couplings_same_slot_is_conflict(
+        self, wpf_school_data
+    ):
+        """Einträge aus zwei verschiedenen Kopplungen im selben Slot → error."""
+        entries = _wpf_slot_entries(day=0, slot=1) + [
+            ScheduleEntry(
+                day=0, slot_number=1, teacher_id="T08",
+                class_id=WPF_CLASS_ID, subject="Religion",
+                is_coupling=True, coupling_id="reli_5",
+            ),
+        ]
+        solution = _solution_from(entries, wpf_school_data.config)
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "class_double_booking" in constraints
+
+    def test_validator_coupling_plus_regular_is_conflict(
+        self, wpf_school_data
+    ):
+        """Kopplungstermin und reguläre Stunde im selben Slot → error."""
+        entries = _wpf_slot_entries(day=0, slot=1) + [
+            ScheduleEntry(
+                day=0, slot_number=1, teacher_id="T01",
+                class_id=WPF_CLASS_ID, subject="Deutsch",
+            ),
+        ]
+        solution = _solution_from(entries, wpf_school_data.config)
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "class_double_booking" in constraints
+
+    def test_validator_unknown_coupling_id_is_conflict(
+        self, wpf_school_data
+    ):
+        """Mehrere Einträge mit unbekannter Kopplungs-ID → error."""
+        entries = [
+            entry.model_copy(update={"coupling_id": "gibt_es_nicht"})
+            for entry in _wpf_slot_entries(day=0, slot=1)
+        ]
+        solution = _solution_from(entries, wpf_school_data.config)
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "class_double_booking" in constraints
 
     def test_validator_unavailable_slot(self, mini_school_data):
         """Lehrer im gesperrten Slot → error 'unavailable_slot_violation'."""

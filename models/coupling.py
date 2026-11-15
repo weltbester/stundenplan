@@ -2,6 +2,10 @@
 
 from pydantic import BaseModel
 
+COUPLING_TYPE_WPF = "wpf"
+# Unter diesem Fachnamen steht der Wahlpflichtbereich in der Stundentafel.
+WPF_CURRICULUM_SUBJECT = "WPF"
+
 
 class CouplingGroup(BaseModel):
     """Eine Gruppe innerhalb einer Kopplung (z.B. "evangelisch" bei Reli/Ethik).
@@ -31,3 +35,13 @@ class Coupling(BaseModel):
     groups: list[CouplingGroup]       # Alle Gruppen dieser Kopplung
     hours_per_week: int               # Gesamtstunden der Kopplung pro Woche
     cross_class: bool = True          # True = klassenübergreifend (Standard)
+
+    def curriculum_subjects(self) -> set[str]:
+        """Stundentafel-Fächer, die diese Kopplung für ihre Klassen abdeckt.
+
+        WPF: die Gruppen heißen nach dem gewählten Fach (z.B. Informatik),
+        in der Stundentafel steht aber "WPF". Sonst: die Fächer der Gruppen.
+        """
+        if self.coupling_type == COUPLING_TYPE_WPF:
+            return {WPF_CURRICULUM_SUBJECT}
+        return {group.subject for group in self.groups}

@@ -104,7 +104,7 @@ python main.py solve --small           # Schnelltest mit 2 Klassen
 python main.py solve --no-soft         # Nur harte Constraints (schneller)
 python main.py solve --time-limit 120  # Zeitlimit in Sekunden
 python main.py solve --diagnose        # Bei INFEASIBLE: Ursachen ermitteln
-python main.py solve --weights gaps=200 subject_spread=80  # Gewichte anpassen
+python main.py solve --weights gaps=200,double_lessons=80  # Gewichte anpassen
 python main.py solve --verbose         # Solver-Fortschritt anzeigen
 ```
 
@@ -229,7 +229,6 @@ teachers:
 solver:
   time_limit_seconds: 300
   weight_gaps: 200          # Springstunden minimieren
-  weight_subject_spread: 60 # Hauptfächer über Woche verteilen
   weight_workload_balance: 50
   weight_double_lessons: 40
   weight_compact: 30
@@ -296,13 +295,21 @@ stundenplan/
 | C12 | Doppelstunden nur in konfigurierten Blöcken | Hart |
 | C13 | Doppelstunden-Anzahl erfüllt | Hart |
 | C14 | Springstunden-Limit (optional) | Hart/Weich |
+| C15 | Pro Klasse, Fach und Tag max. 1 Stunde oder 1 Doppelblock | Hart |
 | S1 | Springstunden minimieren | Weich |
 | S2 | Gleichmäßige Tagesverteilung | Weich |
 | S3 | Wunsch-freie Tage honorieren | Weich |
 | S4 | Kompakte Lehrerpläne | Weich |
 | S5 | Optionale Doppelstunden fördern | Weich |
-| S6 | Hauptfach-Verteilung über Woche | Weich |
-| S7 | Deputat-Optimierung Richtung Maximum | Weich |
+| S6 | Deputat-Optimierung Richtung Maximum | Weich |
+
+**C15 im Detail:** Zwei Stunden desselben Fachs am selben Tag sind nur
+als konfigurierter Doppelstunden-Block (z.B. 1–2, 3–4, 5–6) erlaubt, drei
+oder mehr nie. Die Regel gilt auch für Kopplungen (Reli/Ethik, WPF).
+`main.py validate --solution` prüft sie unabhängig vom Solver
+(Verstoß: `subject_day_limit`). Das frühere Gewicht
+`weight_subject_spread` ist ohne Wirkung und nur noch aus
+Kompatibilitätsgründen in der Konfiguration erlaubt.
 
 ---
 
@@ -327,7 +334,7 @@ Häufige Ursachen:
 ### Solver findet keine gute Lösung (schlechte Qualität)
 
 - Zeitlimit erhöhen: `--time-limit 600`
-- Soft-Gewichte anpassen: `--weights gaps=300 subject_spread=100`
+- Soft-Gewichte anpassen: `--weights gaps=300,double_lessons=100`
 - Solver-Parallelismus: `num_workers: 0` in der Config (= automatisch alle Kerne)
 
 ### Springstunden zu hoch

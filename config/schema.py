@@ -271,9 +271,11 @@ class SolverConfig(BaseModel):
     # Gewicht für optionale Doppelstunden
     weight_double_lessons: int = Field(40, ge=0,
         description="Gewicht: Optionale Doppelstunden")
-    # Gewicht für Verteilung von Hauptfächern über die Woche
+    # VERALTET, ohne Wirkung: die Verteilung über die Woche erzwingt die
+    # harte Regel C15 (max. 1 Stunde oder 1 Doppelblock pro Fach und Tag).
+    # Das Feld bleibt, damit bestehende YAML-Dateien und Szenarien laden.
     weight_subject_spread: int = Field(60, ge=0,
-        description="Gewicht: Hauptfächer über Woche verteilen")
+        description="Veraltet (ohne Wirkung, ersetzt durch C15)")
     # Gewicht für Deputat-Auslastung (immer aktiv, auch bei --no-soft)
     # Minimiert sum(dep_max - actual): Solver strebt dep_max an; dep_min ist nur Sicherheitsboden.
     weight_deputat_deviation: int = Field(50, ge=0,

@@ -339,7 +339,6 @@ def _wizard_solver() -> SolverConfig:
         ("Wunsch-freie Tage", "20", "Wunsch-freie Tage berücksichtigen"),
         ("Kompakte Pläne", "30", "Lehrkräfte-Pläne kompakt halten"),
         ("Doppelstunden", "40", "Optionale Doppelstunden bevorzugen"),
-        ("Hauptfach-Verteilung", "60", "Hauptfächer über Woche verteilen"),
     ]
     for r in rows:
         table.add_row(*r)
@@ -356,7 +355,6 @@ def _wizard_solver() -> SolverConfig:
     w_dw = IntPrompt.ask("Gewicht Wunsch-freie Tage", default=20)
     w_cmp = IntPrompt.ask("Gewicht Kompakte Pläne", default=30)
     w_dbl = IntPrompt.ask("Gewicht Doppelstunden", default=40)
-    w_spr = IntPrompt.ask("Gewicht Hauptfach-Verteilung", default=60)
 
     _success("Solver-Konfiguration abgeschlossen.")
     return SolverConfig(
@@ -367,7 +365,6 @@ def _wizard_solver() -> SolverConfig:
         weight_day_wishes=w_dw,
         weight_compact=w_cmp,
         weight_double_lessons=w_dbl,
-        weight_subject_spread=w_spr,
     )
 
 

@@ -1029,3 +1029,115 @@ class TestFull36Classes:
 
         if solution.solver_status in ("OPTIMAL", "FEASIBLE"):
             assert len(solution.entries) > 0
+
+
+# ─── C15: max. 1 Stunde oder 1 Doppelblock pro Fach und Tag ───────────────────
+
+def _day_limit_violations(solution: ScheduleSolution, data: SchoolData):
+    """Verstöße gegen die Tagesregel laut unabhängigem Validator."""
+    from analysis.solution_validator import SolutionValidator
+
+    report = SolutionValidator().validate(solution, data)
+    return [
+        v for v in report.violations if v.constraint == "subject_day_limit"
+    ]
+
+
+def _deutsch_pins(slots: tuple[int, ...]) -> list[PinnedLesson]:
+    """Fixiert Deutsch der 5a bei T01 montags in den gegebenen Slots."""
+    return [
+        PinnedLesson(teacher_id="T01", class_id="5a", subject="Deutsch",
+                     day=0, slot_number=slot)
+        for slot in slots
+    ]
+
+
+class TestSubjectDayLimit:
+    """C15: ein Fach pro Klasse und Tag nur einmal oder als Doppelblock."""
+
+    def test_hard_only_solution_respects_limit(self):
+        data = make_mini_school_data()
+        solution = ScheduleSolver(data).solve(use_soft=False)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _day_limit_violations(solution, data) == []
+
+    def test_soft_solution_respects_limit(self):
+        data = make_mini_school_data()
+        data.config.solver.time_limit_seconds = 15
+        solution = ScheduleSolver(data).solve(use_soft=True)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _day_limit_violations(solution, data) == []
+
+    def test_five_hour_subject_is_solvable(self):
+        """5h Deutsch brauchen mindestens 3 Tage und bleiben lösbar."""
+        data = make_mini_school_data()
+        class_5a = next(c for c in data.classes if c.id == "5a")
+        class_5a.curriculum["Deutsch"] = 5
+
+        solution = ScheduleSolver(data).solve(use_soft=False)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _day_limit_violations(solution, data) == []
+        deutsch_days = {
+            e.day for e in solution.entries
+            if e.class_id == "5a" and e.subject == "Deutsch"
+        }
+        assert len(deutsch_days) >= 3
+
+    def test_two_separate_lessons_same_day_are_infeasible(self):
+        """Deutsch in Stunde 1 und 3 am selben Tag ist verboten."""
+        data = make_mini_school_data()
+        solution = ScheduleSolver(data).solve(
+            pins=_deutsch_pins((1, 3)), use_soft=False
+        )
+        assert solution.solver_status == "INFEASIBLE"
+
+    def test_adjacent_lessons_outside_block_are_infeasible(self):
+        """Stunde 2 und 3 liegen nebeneinander, sind aber kein Block."""
+        data = make_mini_school_data()
+        solution = ScheduleSolver(data).solve(
+            pins=_deutsch_pins((2, 3)), use_soft=False
+        )
+        assert solution.solver_status == "INFEASIBLE"
+
+    def test_double_block_same_day_is_feasible(self):
+        """Deutsch im Block 1–2 ist erlaubt."""
+        data = make_mini_school_data()
+        solution = ScheduleSolver(data).solve(
+            pins=_deutsch_pins((1, 2)), use_soft=False
+        )
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _day_limit_violations(solution, data) == []
+
+    def test_subject_spread_weight_is_accepted_but_ignored(self):
+        """Der veraltete Gewichtsschlüssel darf weiter übergeben werden."""
+        data = make_mini_school_data()
+        data.config.solver.time_limit_seconds = 15
+        solution = ScheduleSolver(data).solve(
+            use_soft=True, weights={"subject_spread": 500}
+        )
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+
+    def test_conflict_cliques_for_default_grid(self):
+        """Blöcke 1-2, 3-4, 5-6 und Einzelslot 7 ergeben 8 Vierer-Cliquen."""
+        solver = ScheduleSolver(make_mini_school_data())
+        solver._build_slot_index()
+        cliques = solver._day_conflict_cliques()
+
+        assert len(cliques) == 8
+        assert all(len(clique) == 4 for clique in cliques)
+        assert all(7 in clique for clique in cliques)
+        block_pairs = [{1, 2}, {3, 4}, {5, 6}]
+        for clique in cliques:
+            for pair in block_pairs:
+                assert not pair.issubset(clique), (
+                    f"Block {pair} darf nie gemeinsam ausgeschlossen sein"
+                )
+
+    def test_conflict_clique_without_blocks_covers_whole_day(self):
+        """Ohne Doppelblöcke ist jeder Slot eine Gruppe: 1 Stunde pro Tag."""
+        data = make_mini_school_data()
+        data.config.time_grid.double_blocks = []
+        solver = ScheduleSolver(data)
+        solver._build_slot_index()
+
+        assert solver._day_conflict_cliques() == [(1, 2, 3, 4, 5, 6, 7)]

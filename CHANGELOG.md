@@ -15,7 +15,16 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Validator-Fehler über mehrere Seeds; Ausgabe als Markdown und CSV in
   `output/benchmarks/`.
 
+- Harte Regel C15: pro Klasse, Fach und Tag höchstens eine Stunde oder
+  ein Doppelstunden-Block (auch für Kopplungen).
+- Validator-Prüfung `subject_day_limit` für dieselbe Regel.
+
 ### Changed
+- Das Soft-Ziel "Hauptfach-Verteilung" ist entfernt: es belohnte das
+  Bündeln eines Fachs auf wenige Tage und ist durch C15 ersetzt.
+  `weight_subject_spread` und `--weights subject_spread=…` werden noch
+  akzeptiert, haben aber keine Wirkung (veraltet). Der Wizard fragt das
+  Gewicht nicht mehr ab.
 - `solve --small` schreibt nach `output/solution_small.json` und
   überschreibt die vollständige Lösung nicht mehr.
 - `.gitignore`: echte Personaldaten (`lehrer.txt`, `lehrer.xlsx`),

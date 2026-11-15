@@ -188,6 +188,19 @@ def _solution_from(
     )
 
 
+def _validate_deutsch_slots(
+    school_data: SchoolData, slots: tuple[int, ...]
+) -> ValidationReport:
+    """Validiert einen Plan, in dem 5a montags Deutsch in `slots` hat."""
+    entries = [
+        ScheduleEntry(day=0, slot_number=slot, teacher_id="T01",
+                      class_id="5a", subject="Deutsch")
+        for slot in slots
+    ]
+    solution = _solution_from(entries, school_data.config)
+    return SolutionValidator().validate(solution, school_data)
+
+
 class TestCouplingCurriculumSubjects:
     """Coupling.curriculum_subjects(): welche Stundentafel-Fächer zählen."""
 
@@ -419,6 +432,61 @@ class TestSolutionValidator:
         report = SolutionValidator().validate(solution, wpf_school_data)
         constraints = [v.constraint for v in report.violations]
         assert "class_double_booking" in constraints
+
+    @pytest.mark.parametrize("slots", [(1,), (1, 2), (3, 4), (5, 6)])
+    def test_day_limit_allows_single_and_double_block(
+        self, mini_school_data, slots
+    ):
+        """Eine Einzelstunde oder ein Doppelblock pro Tag ist erlaubt."""
+        report = _validate_deutsch_slots(mini_school_data, slots)
+        constraints = [v.constraint for v in report.violations]
+        assert "subject_day_limit" not in constraints
+
+    @pytest.mark.parametrize(
+        "slots", [(1, 3), (2, 3), (6, 7), (1, 2, 3), (1, 2, 5, 6)]
+    )
+    def test_day_limit_rejects_bunched_lessons(
+        self, mini_school_data, slots
+    ):
+        """Getrennte Stunden, Nicht-Blöcke und 3+ Stunden am Tag → error."""
+        report = _validate_deutsch_slots(mini_school_data, slots)
+        day_limit_errors = [
+            v for v in report.violations
+            if v.constraint == "subject_day_limit"
+        ]
+        assert len(day_limit_errors) == 1
+        assert day_limit_errors[0].severity == "error"
+        assert day_limit_errors[0].entity == "5a"
+
+    def test_day_limit_counts_days_separately(self, mini_school_data):
+        """Je eine Stunde an verschiedenen Tagen ist kein Verstoß."""
+        entries = [
+            ScheduleEntry(day=day, slot_number=1, teacher_id="T01",
+                          class_id="5a", subject="Deutsch")
+            for day in range(4)
+        ]
+        solution = _solution_from(entries, mini_school_data.config)
+        report = SolutionValidator().validate(solution, mini_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "subject_day_limit" not in constraints
+
+    def test_day_limit_coupling_block_allowed(self, wpf_school_data):
+        """Zwei Termine einer Kopplung als Doppelblock sind erlaubt."""
+        entries = (_wpf_slot_entries(day=0, slot=1)
+                   + _wpf_slot_entries(day=0, slot=2))
+        solution = _solution_from(entries, wpf_school_data.config)
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "subject_day_limit" not in constraints
+
+    def test_day_limit_coupling_split_rejected(self, wpf_school_data):
+        """Zwei getrennte Termine einer Kopplung am selben Tag → error."""
+        entries = (_wpf_slot_entries(day=0, slot=1)
+                   + _wpf_slot_entries(day=0, slot=5))
+        solution = _solution_from(entries, wpf_school_data.config)
+        report = SolutionValidator().validate(solution, wpf_school_data)
+        constraints = [v.constraint for v in report.violations]
+        assert "subject_day_limit" in constraints
 
     def test_validator_unavailable_slot(self, mini_school_data):
         """Lehrer im gesperrten Slot → error 'unavailable_slot_violation'."""

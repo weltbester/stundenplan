@@ -85,6 +85,7 @@ class SolutionValidator:
         violations.extend(self._check_deputat_bounds(solution, school_data))
         violations.extend(self._check_coupling_consistency(solution, school_data))
         violations.extend(self._check_unavailable_slots(solution, school_data))
+        violations.extend(self._check_subject_day_limit(solution, school_data))
 
         has_errors = any(v.severity == "error" for v in violations)
         return ValidationReport(violations=violations, is_valid=not has_errors)
@@ -335,4 +336,44 @@ class SolutionValidator:
                         f"aber {e.subject} für {e.class_id} eingeplant."
                     ),
                 ))
+        return violations
+
+    def _check_subject_day_limit(
+        self, solution: ScheduleSolution, school_data: SchoolData
+    ) -> list[ValidationViolation]:
+        """Pro Klasse, Fach und Tag höchstens 1 Stunde oder 1 Doppelblock.
+
+        Zwei Stunden am selben Tag sind nur als konfigurierter
+        Doppelstunden-Block erlaubt. Kopplungen werden pro Kopplung
+        gezählt, weil parallele Gruppen denselben Slot belegen.
+        """
+        block_pairs = {
+            (db.slot_first, db.slot_second)
+            for db in school_data.config.time_grid.double_blocks
+        }
+
+        slots_by_day: dict[tuple, set[int]] = defaultdict(set)
+        for e in solution.entries:
+            if e.is_coupling and e.coupling_id:
+                label = f"Kopplung {e.coupling_id}"
+            else:
+                label = f"Fach {e.subject}"
+            slots_by_day[(e.class_id, label, e.day)].add(e.slot_number)
+
+        violations: list[ValidationViolation] = []
+        for (class_id, label, day), slots in slots_by_day.items():
+            ordered = tuple(sorted(slots))
+            is_single_lesson = len(ordered) == 1
+            if is_single_lesson or ordered in block_pairs:
+                continue
+            slot_list = ", ".join(str(slot) for slot in ordered)
+            violations.append(ValidationViolation(
+                severity="error",
+                constraint="subject_day_limit",
+                entity=class_id,
+                description=(
+                    f"Tag {day+1}: {label} in den Stunden {slot_list} – "
+                    f"erlaubt ist eine Einzelstunde oder ein Doppelblock."
+                ),
+            ))
         return violations

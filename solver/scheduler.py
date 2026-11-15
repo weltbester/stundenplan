@@ -12,6 +12,7 @@ Architektur:
 import os
 import time
 import logging
+from itertools import product
 from pathlib import Path
 from typing import Optional
 
@@ -441,6 +442,7 @@ class ScheduleSolver:
         self._c13_pin_constraints()
         self._gap_vars = self._build_gap_vars()   # einmalig, für C14 + Soft
         self._c14_gap_limit()
+        self._c15_subject_day_limit()
 
     def _c1_slot_implies_assign(self) -> None:
         """slot[t,c,s,d,h] <= assign[t,c,s]"""
@@ -1161,8 +1163,9 @@ class ScheduleSolver:
             "gaps":           sc.weight_gaps,
             "day_wishes":     sc.weight_day_wishes,
             "double_lessons": sc.weight_double_lessons,
-            "subject_spread": sc.weight_subject_spread,
         }
+        # "subject_spread" wird weiterhin akzeptiert, hat aber keine Wirkung
+        # mehr: die Verteilung über die Woche erzwingt jetzt C15 (hart).
         if weights:
             w.update(weights)
 
@@ -1173,8 +1176,6 @@ class ScheduleSolver:
             terms.extend(self._soft_day_wish_penalties(w["day_wishes"]))
         if w["double_lessons"] > 0:
             terms.extend(self._soft_double_preferred_bonuses(w["double_lessons"]))
-        if w["subject_spread"] > 0:
-            terms.extend(self._soft_subject_spread_penalties(w["subject_spread"]))
 
         if terms:
             self._model.minimize(sum(terms))
@@ -1291,6 +1292,68 @@ class ScheduleSolver:
             if teacher_gap_vars:
                 self._model.add(sum(teacher_gap_vars) <= max_gaps)
 
+    def _c15_subject_day_limit(self) -> None:
+        """Pro Klasse, Fach und Tag höchstens 1 Stunde oder 1 Doppelblock.
+
+        Zwei Stunden desselben Fachs am selben Tag sind nur als
+        konfigurierter Doppelstunden-Block erlaubt, drei oder mehr nie.
+        Gilt ebenso für Kopplungen (pro Kopplung und Tag).
+
+        Formulierung als At-most-one-Cliquen (siehe _day_conflict_cliques):
+        für den Solver deutlich schärfer als eine Summen-Ungleichung.
+        """
+        cliques = self._day_conflict_cliques()
+        for literals_by_slot in self._lesson_streams_per_day():
+            for clique in cliques:
+                literals = [
+                    var
+                    for slot_number in clique
+                    for var in literals_by_slot.get(slot_number, [])
+                ]
+                if len(literals) > 1:
+                    self._model.add_at_most_one(literals)
+
+    def _day_conflict_cliques(self) -> list[tuple[int, ...]]:
+        """Slot-Mengen, aus denen ein Fach pro Tag höchstens einen belegt.
+
+        Die Slots eines Tages zerfallen in Gruppen: jeder Doppelblock ist
+        eine Zweiergruppe, jeder übrige Slot eine Einergruppe. Erlaubt sind
+        nur Stunden innerhalb EINER Gruppe. Zwei Slots aus verschiedenen
+        Gruppen schließen sich also aus; die größten solchen Mengen
+        entstehen, indem man aus jeder Gruppe genau einen Slot wählt.
+        Default-Raster (Blöcke 1-2, 3-4, 5-6, Einzelslot 7): 8 Cliquen.
+        """
+        tg = self.config.time_grid
+        slot_numbers = {s.slot_number for s in self.sek1_slots}
+
+        groups: list[tuple[int, ...]] = []
+        grouped: set[int] = set()
+        for db in tg.double_blocks:
+            block = (db.slot_first, db.slot_second)
+            if slot_numbers.issuperset(block) and grouped.isdisjoint(block):
+                groups.append(block)
+                grouped.update(block)
+        groups.extend((h,) for h in sorted(slot_numbers - grouped))
+
+        return list(product(*groups))
+
+    def _lesson_streams_per_day(self) -> list[dict[int, list]]:
+        """Je (Klasse, Fach, Tag) und je (Kopplung, Tag): Slot → Literale.
+
+        Reguläre Fächer: alle Slot-Variablen der möglichen Lehrkräfte.
+        Kopplungen: die eine coupling_slot-Variable des Slots.
+        """
+        regular: dict[tuple, dict[int, list]] = {}
+        for (_, c, s, day, h), var in self._slot.items():
+            stream = regular.setdefault((c, s, day), {})
+            stream.setdefault(h, []).append(var)
+
+        coupled: dict[tuple, dict[int, list]] = {}
+        for (coupling_id, day, h), var in self._coupling_slot.items():
+            coupled.setdefault((coupling_id, day), {})[h] = [var]
+
+        return list(regular.values()) + list(coupled.values())
+
     def _soft_gap_penalties(self, weight: int) -> list:
         """Springstunden-Strafe: nutzt vorberechnete _gap_vars (inkl. Kopplungen).
 
@@ -1341,36 +1404,6 @@ class ScheduleSolver:
         for (t, c, s, day, bs), dvar in self._double.items():
             if s in double_preferred:
                 terms.append(-weight * dvar)
-        return terms
-
-    def _soft_subject_spread_penalties(self, weight: int) -> list:
-        """Strafe wenn ein Hauptfach an zu vielen verschiedenen Tagen unterrichtet wird.
-
-        Zählt die Tage, an denen jedes Hauptfach in jeder Klasse vorkommt.
-        Je mehr Tage, desto höher die Strafe (fördert Bündelung in Doppelstunden).
-        """
-        tg = self.config.time_grid
-        hauptfach_subjects = {
-            n for n, m in SUBJECT_METADATA.items()
-            if m.get("is_hauptfach")
-        }
-        terms = []
-
-        for (t, c, s) in self._assign:
-            if s not in hauptfach_subjects:
-                continue
-            for day in range(tg.days_per_week):
-                day_vars = self._sidx_tcsd.get((t, c, s, day), [])
-                if day_vars:
-                    day_active = self._model.new_bool_var(
-                        f"soft_spread_{t}_{c}_{s}_{day}"
-                    )
-                    self._model.add_bool_or(day_vars).only_enforce_if(day_active)
-                    self._model.add(sum(day_vars) == 0).only_enforce_if(
-                        day_active.negated()
-                    )
-                    terms.append(day_active * weight)
-
         return terms
 
     def _soft_deputat_deviation_penalties(self, weight: int) -> list:

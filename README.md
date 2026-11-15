@@ -274,6 +274,7 @@ stundenplan/
 ├── solver/          CP-SAT Solver, Pinning, Constraint-Relaxer
 ├── analysis/        Validierung, Qualitätsbericht, Vertretungshelfer
 ├── export/          Excel- und PDF-Export
+├── benchmarks/      Entwickler-Benchmark (Solver-Messungen)
 └── main.py          CLI (click)
 ```
 
@@ -357,6 +358,26 @@ pytest tests/test_analysis.py            # Nur Analyse-Tests
 pytest -k "not full_36"                  # Ohne langsamen 36-Klassen-Test
 pytest -m slow                           # Nur der 36-Klassen-Test
 ```
+
+### Benchmark (für Entwickler)
+
+Misst den Solver über mehrere Seeds und schreibt eine Tabelle nach
+`output/benchmarks/`. Dient als Vorher/Nachher-Vergleich bei jeder
+Solver-Änderung.
+
+```bash
+python3.14 -m benchmarks.run_benchmark --dataset loose-36 --seeds 3
+python3.14 -m benchmarks.run_benchmark --seeds 1 --time-limit 60 \
+    --label schnelltest
+```
+
+| Spalte | Bedeutung |
+|--------|-----------|
+| Aufbau s | Zeit für den Modellaufbau |
+| Erste Lösung s | Suchzeit bis zum ersten gültigen Plan |
+| Spätgewinn % | Anteil der Verbesserung in den letzten 20 % des Zeitlimits (nahe 0 = ausgereift) |
+| Fach-Häufungen | Klasse hat dasselbe Fach 3× oder öfter an einem Tag |
+| Validator-Fehler | Verstöße laut unabhängiger Nachprüfung |
 
 ---
 

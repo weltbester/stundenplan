@@ -9,6 +9,11 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 - `show` zeigt Raumpläne für Sonderräume und Klassenräume
   (z.B. `show PH1`, `show 101`).
 - `CHANGELOG.md`.
+- Entwickler-Benchmark `benchmarks/` (`python3.14 -m
+  benchmarks.run_benchmark`): misst Modellaufbau, Zeit bis zur ersten
+  Lösung, Zielwert-Verlauf, Springstunden, Fach-Häufungen und
+  Validator-Fehler über mehrere Seeds; Ausgabe als Markdown und CSV in
+  `output/benchmarks/`.
 
 ### Changed
 - `solve --small` schreibt nach `output/solution_small.json` und

@@ -203,3 +203,134 @@ class TestRunOnce:
         assert result.validator_errors == 0
         assert result.total_gaps is not None
         assert result.bunched_subject_days is not None
+
+
+class TestValidSeedSelection:
+    """Ungültige Testdaten werden übersprungen und gemeldet."""
+
+    @staticmethod
+    def _factory(seed: int):
+        """Mini-Daten; Seed 43 enthält eine unbekannte Lehrkraft."""
+        from models.fixed_assignment import FixedAssignment
+
+        data = make_mini_school_data()
+        if seed != 43:
+            return data
+        broken = FixedAssignment(
+            class_id="5a", subject="Deutsch", teacher_id="XXX"
+        )
+        return data.model_copy(update={"fixed_assignments": [broken]})
+
+    def test_invalid_seed_is_skipped_with_note(self):
+        from benchmarks.run_benchmark import collect_valid_datasets
+
+        datasets, notes = collect_valid_datasets(self._factory, 3)
+        assert [seed for seed, _ in datasets] == [42, 44, 45]
+        assert len(notes) == 1
+        assert notes[0].startswith("Seed 43 übersprungen")
+
+    def test_failed_distribution_is_skipped_with_note(self):
+        from benchmarks.assignment import AssignmentError
+        from benchmarks.run_benchmark import collect_valid_datasets
+
+        def factory(seed: int):
+            if seed == 42:
+                raise AssignmentError("keine Verteilung")
+            return make_mini_school_data()
+
+        datasets, notes = collect_valid_datasets(factory, 2)
+        assert [seed for seed, _ in datasets] == [43, 44]
+        assert notes == [
+            "Seed 42 übersprungen (Daten ungültig): keine Verteilung"
+        ]
+
+    def test_notes_appear_in_markdown(self):
+        text = render_markdown([_result()], "demo", ["Seed 43 übersprungen"])
+        assert "- Seed 43 übersprungen" in text
+
+
+class TestAssignTeachers:
+    """Generator für eine vollständige Unterrichtsverteilung."""
+
+    def test_every_class_subject_gets_exactly_one_teacher(self):
+        from benchmarks.assignment import assign_teachers
+        from models.fixed_assignment import coupling_subjects_by_class
+
+        data = make_mini_school_data()
+        assigned = assign_teachers(data, seed=42)
+        covered = coupling_subjects_by_class(data.couplings)
+        expected = {
+            (c.id, subject)
+            for c in data.classes
+            for subject, hours in c.curriculum.items()
+            if hours > 0 and subject not in covered.get(c.id, set())
+        }
+        pairs = [(a.class_id, a.subject) for a in assigned.fixed_assignments]
+        assert set(pairs) == expected
+        assert len(pairs) == len(expected)
+        assert all(
+            group.teacher_id
+            for coupling in assigned.couplings
+            for group in coupling.groups
+        )
+
+    def test_result_passes_the_feasibility_check(self):
+        from benchmarks.assignment import assign_teachers
+
+        assigned = assign_teachers(make_mini_school_data(), seed=42)
+        report = assigned.validate_feasibility()
+        assert report.is_feasible, report.errors
+
+    def test_same_seed_gives_same_distribution(self):
+        from benchmarks.assignment import assign_teachers
+
+        first = assign_teachers(make_mini_school_data(), seed=7)
+        second = assign_teachers(make_mini_school_data(), seed=7)
+        assert first.fixed_assignments == second.fixed_assignments
+
+    def test_original_data_is_not_modified(self):
+        from benchmarks.assignment import assign_teachers
+
+        data = make_mini_school_data()
+        assign_teachers(data, seed=42)
+        assert data.fixed_assignments == []
+        assert all(
+            group.teacher_id is None
+            for coupling in data.couplings
+            for group in coupling.groups
+        )
+
+    def test_load_respects_blocked_days_and_daily_maximum(self):
+        """Seed 46: HOF darf nur 15h (3 + 6 + 6), nicht 17 freie Slots."""
+        data = build_dataset("loose-36-fixed", 46)
+        grid = data.config.time_grid
+        hours = {
+            (c.id, subject): value
+            for c in data.classes
+            for subject, value in c.curriculum.items()
+        }
+        load: dict[str, int] = {}
+        for item in data.fixed_assignments:
+            load[item.teacher_id] = (
+                load.get(item.teacher_id, 0)
+                + hours[(item.class_id, item.subject)]
+            )
+        for coupling in data.couplings:
+            for group in coupling.groups:
+                load[group.teacher_id] = (
+                    load.get(group.teacher_id, 0) + group.hours_per_week
+                )
+        for teacher in data.teachers:
+            capacity = teacher.teachable_hours(
+                grid.days_per_week, grid.sek1_max_slot
+            )
+            assert load.get(teacher.id, 0) <= capacity, teacher.id
+
+    def test_fixed_dataset_is_registered(self):
+        assert "loose-36-fixed" in dataset_names()
+
+    def test_fixed_dataset_returns_invalid_raw_data_unchanged(self):
+        # Seed 45 erzeugt Daten ohne Latein-Lehrkraft.
+        data = build_dataset("loose-36-fixed", 45)
+        assert not data.validate_feasibility().is_feasible
+        assert data.fixed_assignments == []

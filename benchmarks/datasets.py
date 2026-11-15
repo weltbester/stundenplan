@@ -3,6 +3,7 @@
 from types import MappingProxyType
 from typing import Callable, Mapping
 
+from benchmarks.assignment import assign_teachers
 from config.defaults import default_school_config
 from data.fake_data import FakeDataGenerator
 from models.school_data import SchoolData
@@ -16,8 +17,21 @@ def _loose_36(seed: int) -> SchoolData:
     return generator.generate()
 
 
+def _loose_36_fixed(seed: int) -> SchoolData:
+    """Wie loose-36, aber mit vollständig vorgegebener Unterrichtsverteilung.
+
+    Ungültige Rohdaten (z.B. ein Fach ohne Lehrkraft) kommen unverändert
+    zurück: der Benchmark überspringt sie dann mit der eigentlichen Ursache.
+    """
+    raw = _loose_36(seed)
+    if not raw.validate_feasibility().is_feasible:
+        return raw
+    return assign_teachers(raw, seed)
+
+
 DATASETS: Mapping[str, DatasetFactory] = MappingProxyType({
     "loose-36": _loose_36,
+    "loose-36-fixed": _loose_36_fixed,
 })
 
 

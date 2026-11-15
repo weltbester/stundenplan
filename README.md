@@ -432,9 +432,16 @@ Solver-Änderung.
 
 ```bash
 python3.14 -m benchmarks.run_benchmark --dataset loose-36 --seeds 3
+python3.14 -m benchmarks.run_benchmark --dataset loose-36-fixed --seeds 3
 python3.14 -m benchmarks.run_benchmark --seeds 1 --time-limit 60 \
     --label schnelltest
 ```
+
+Datensätze: `loose-36` (Solver verteilt die Lehrkräfte selbst) und
+`loose-36-fixed` (dieselben Daten mit vollständig vorgegebener
+Unterrichtsverteilung). Seeds, deren generierte Daten den
+Machbarkeits-Check nicht bestehen, werden übersprungen und unter der
+Tabelle genannt.
 
 | Spalte | Bedeutung |
 |--------|-----------|

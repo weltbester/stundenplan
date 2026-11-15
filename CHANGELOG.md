@@ -25,6 +25,9 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 - Der Solver berücksichtigt die vorgegebene Unterrichtsverteilung
   (Klasse-Fach-Zuweisungen und Kopplungsgruppen, auch fachfremd) und
   erzeugt dafür nur Variablen der vorgegebenen Lehrkraft.
+- Benchmark: Datensatz `loose-36-fixed` mit generierter vollständiger
+  Unterrichtsverteilung (`benchmarks/assignment.py`); Seeds mit
+  ungültigen Testdaten werden übersprungen und gemeldet.
 - Machbarkeits-Check prüft die Vorgaben (unbekannte Klasse/Kürzel,
   Fach nicht in der Stundentafel, Deputat-Max, Sperrzeiten,
   Deputat-Min erreichbar; fachfremder Einsatz als Warnung).

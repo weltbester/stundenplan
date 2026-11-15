@@ -3,7 +3,7 @@
 import csv
 from pathlib import Path
 from statistics import median
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from benchmarks.runner import RunResult
 
@@ -55,8 +55,13 @@ def summarize(results: list[RunResult]) -> str:
     )
 
 
-def render_markdown(results: list[RunResult], title: str) -> str:
-    """Erzeugt eine Markdown-Tabelle mit einer Zeile pro Lauf."""
+def render_markdown(
+    results: list[RunResult], title: str, notes: Sequence[str] = ()
+) -> str:
+    """Erzeugt eine Markdown-Tabelle mit einer Zeile pro Lauf.
+
+    `notes` (z.B. übersprungene Seeds) erscheinen unter der Tabelle.
+    """
     headers = [header for header, _ in COLUMNS]
     lines = [
         f"# Benchmark: {title}",
@@ -67,7 +72,10 @@ def render_markdown(results: list[RunResult], title: str) -> str:
     for result in results:
         cells = [_cell(getter(result)) for _, getter in COLUMNS]
         lines.append("| " + " | ".join(cells) + " |")
-    lines += ["", summarize(results), "", _legend(), ""]
+    lines += ["", summarize(results), ""]
+    if notes:
+        lines += [f"- {note}" for note in notes] + [""]
+    lines += [_legend(), ""]
     return "\n".join(lines)
 
 
@@ -95,7 +103,14 @@ def write_csv(results: list[RunResult], path: Path) -> None:
             writer.writerow(result.model_dump())
 
 
-def write_markdown(results: list[RunResult], title: str, path: Path) -> None:
+def write_markdown(
+    results: list[RunResult],
+    title: str,
+    path: Path,
+    notes: Sequence[str] = (),
+) -> None:
     """Schreibt die Markdown-Tabelle nach `path`."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_markdown(results, title), encoding="utf-8")
+    path.write_text(
+        render_markdown(results, title, notes), encoding="utf-8"
+    )

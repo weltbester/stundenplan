@@ -28,6 +28,9 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 - Benchmark: Datensatz `loose-36-fixed` mit generierter vollständiger
   Unterrichtsverteilung (`benchmarks/assignment.py`); Seeds mit
   ungültigen Testdaten werden übersprungen und gemeldet.
+- Referenz `docs/bundeslaender.md`: Vorgaben der 16 Länder für die
+  Sek I am Gymnasium (G8/G9, Schüler- und Lehrerstunden), Abgleich
+  mit dem Programm und nötige Erweiterungen je Länderfamilie.
 - Machbarkeits-Check prüft die Vorgaben (unbekannte Klasse/Kürzel,
   Fach nicht in der Stundentafel, Deputat-Max, Sperrzeiten,
   Deputat-Min erreichbar; fachfremder Einsatz als Warnung).

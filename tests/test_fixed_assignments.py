@@ -503,3 +503,131 @@ class TestExportWorkbook:
         ])
         assert result.exit_code == 1
         assert "--from-data" in result.output
+
+
+# ─── Solver berücksichtigt die Vorgaben ───────────────────────────────────────
+
+def _solve(data: SchoolData):
+    from solver.scheduler import ScheduleSolver
+
+    return ScheduleSolver(data).solve(use_soft=False)
+
+
+def _teachers_of(solution, class_id: str, subject: str) -> set[str]:
+    return {
+        entry.teacher_id for entry in solution.entries
+        if entry.class_id == class_id and entry.subject == subject
+        and not entry.is_coupling
+    }
+
+
+def _assignment_set(solution) -> set[tuple[str, str, str]]:
+    return {
+        (a.class_id, a.subject, a.teacher_id) for a in solution.assignments
+    }
+
+
+class TestSolverUsesAssignments:
+
+    @pytest.mark.parametrize("teacher_id", ["T01", "T07", "T10"])
+    def test_fixed_teacher_teaches_the_subject(self, teacher_id: str):
+        """Jede der drei Deutsch-Lehrkräfte lässt sich für 5a erzwingen."""
+        data = make_mini_school_data().model_copy(update={
+            "fixed_assignments": [_fixed("5a", "Deutsch", teacher_id)],
+        })
+        solution = _solve(data)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _teachers_of(solution, "5a", "Deutsch") == {teacher_id}
+        assigned = {
+            a.teacher_id for a in solution.assignments
+            if a.class_id == "5a" and a.subject == "Deutsch"
+        }
+        assert assigned == {teacher_id}
+
+    def test_out_of_field_teacher_is_respected(self):
+        """T04 (Biologie/Erdkunde) übernimmt fachfremd Politik in 5a."""
+        data = make_mini_school_data().model_copy(update={
+            "fixed_assignments": [_fixed("5a", "Politik", "T04")],
+        })
+        solution = _solve(data)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _teachers_of(solution, "5a", "Politik") == {"T04"}
+
+    def test_fixed_coupling_teacher_is_respected(self):
+        data = make_mini_school_data()
+        data.couplings[0].groups[0].teacher_id = "T09"
+        solution = _solve(data)
+        assert solution.solver_status in ("OPTIMAL", "FEASIBLE")
+        coupling = data.couplings[0]
+        group_subject = coupling.groups[0].subject
+        teachers = {
+            entry.teacher_id for entry in solution.entries
+            if entry.coupling_id == coupling.id
+            and entry.subject == group_subject
+        }
+        assert teachers == {"T09"}
+
+    def test_full_distribution_is_reproduced_with_fewer_variables(self):
+        """Plan lösen, Verteilung vorgeben, erneut lösen: gleiche Verteilung."""
+        from data.excel_data_export import (
+            assignments_from_solution, couplings_with_solution_teachers,
+        )
+
+        free_data = make_mini_school_data()
+        free = _solve(free_data)
+        assert free.solver_status in ("OPTIMAL", "FEASIBLE")
+
+        fixed_data = free_data.model_copy(update={
+            "fixed_assignments": assignments_from_solution(free),
+            "couplings": couplings_with_solution_teachers(
+                free_data.couplings, free
+            ),
+        })
+        assert fixed_data.validate_feasibility().is_feasible
+        fixed = _solve(fixed_data)
+
+        assert fixed.solver_status in ("OPTIMAL", "FEASIBLE")
+        assert _assignment_set(fixed) == _assignment_set(free)
+        # Der Mini-Datensatz hat kaum Alternativen je Fach; bei 36 Klassen
+        # ist die Ersparnis deutlich größer.
+        assert fixed.num_variables < free.num_variables
+
+    def test_impossible_distribution_is_infeasible(self):
+        """T01 soll 10h geben, darf aber höchstens 9h: kein Plan."""
+        data = make_mini_school_data().model_copy(update={
+            "fixed_assignments": [
+                _fixed("5a", "Deutsch", "T01"),
+                _fixed("7a", "Deutsch", "T01"),
+                _fixed("5a", "Geschichte", "T01"),
+            ],
+        })
+        assert not data.validate_feasibility().is_feasible
+        assert _solve(data).solver_status == "INFEASIBLE"
+
+    def test_unknown_teacher_raises_clear_error(self):
+        data = make_mini_school_data().model_copy(update={
+            "fixed_assignments": [_fixed("5a", "Deutsch", "XXX")],
+        })
+        with pytest.raises(ValueError, match="unbekanntes Kürzel 'XXX'"):
+            _solve(data)
+
+
+class TestRelaxerKeepsAssignments:
+    """Die INFEASIBLE-Diagnose rechnet mit der vorgegebenen Verteilung."""
+
+    def test_relaxed_copies_keep_fixed_assignments(self):
+        from solver.constraint_relaxer import ConstraintRelaxer
+
+        fixed = [_fixed("5a", "Deutsch", "T01")]
+        data = make_mini_school_data().model_copy(
+            update={"fixed_assignments": fixed}
+        )
+        relaxer = ConstraintRelaxer(data)
+        copies = [
+            relaxer._relax_no_room_limits(),
+            relaxer._relax_no_couplings(),
+            relaxer._relax_no_gap_limit(),
+            relaxer._relax_wider_deputat_bounds(),
+            relaxer._relax_all_combined(),
+        ]
+        assert all(copy.fixed_assignments == fixed for copy in copies)

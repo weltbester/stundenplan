@@ -170,6 +170,7 @@ class ConstraintRelaxer:
             teachers=self.data.teachers,
             couplings=self.data.couplings,
             config=new_config,
+            fixed_assignments=self.data.fixed_assignments,
         )
 
     def _relax_no_couplings(self) -> SchoolData:
@@ -181,6 +182,7 @@ class ConstraintRelaxer:
             teachers=self.data.teachers,
             couplings=[],
             config=self.data.config,
+            fixed_assignments=self.data.fixed_assignments,
         )
 
     def _relax_no_gap_limit(self) -> SchoolData:
@@ -194,6 +196,7 @@ class ConstraintRelaxer:
             teachers=self.data.teachers,
             couplings=self.data.couplings,
             config=new_config,
+            fixed_assignments=self.data.fixed_assignments,
         )
 
     def _relax_wider_deputat_bounds(self) -> SchoolData:
@@ -212,6 +215,7 @@ class ConstraintRelaxer:
             teachers=new_teachers,
             couplings=self.data.couplings,
             config=self.data.config,
+            fixed_assignments=self.data.fixed_assignments,
         )
 
     def _relax_all_combined(self) -> SchoolData:
@@ -248,6 +252,7 @@ class ConstraintRelaxer:
             teachers=new_teachers,
             couplings=[],  # Kopplungen entfernen
             config=new_config,
+            fixed_assignments=self.data.fixed_assignments,
         )
 
     # ─── Solver-Ausführung ────────────────────────────────────────────────────
@@ -308,6 +313,7 @@ class ConstraintRelaxer:
                     teachers=data.teachers,
                     couplings=data.couplings,
                     config=new_config,
+                    fixed_assignments=data.fixed_assignments,
                 )
 
             solver = ScheduleSolver(modified_data)
@@ -352,6 +358,7 @@ class ConstraintRelaxer:
                 teachers=self.data.teachers,
                 couplings=self.data.couplings,
                 config=new_config,
+                fixed_assignments=self.data.fixed_assignments,
             )
             solver = ScheduleSolver(modified_data)
             solution = solver.solve(pins=pins, use_soft=False)

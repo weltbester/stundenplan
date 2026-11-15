@@ -308,8 +308,16 @@ python main.py template -o output/verteilung.xlsx \
 python main.py import output/verteilung.xlsx --save-json
 ```
 
-> Stand: Die Vorgaben werden importiert, geprüft und gespeichert. Der
-> Solver berücksichtigt sie ab dem nächsten Entwicklungsschritt.
+Der Solver hält sich an jede Vorgabe (auch fachfremde) und erzeugt für
+vorgegebene Klasse-Fach-Paare nur noch Variablen für diese eine
+Lehrkraft. Eine vollständige Verteilung verkleinert das Modell bei 36
+Klassen von rund 174.000 auf rund 30.000 Variablen. Ablauf:
+
+```bash
+python main.py import output/verteilung.xlsx --save-json
+python main.py solve
+python main.py show 5a
+```
 
 ---
 

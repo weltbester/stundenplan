@@ -328,6 +328,13 @@ class ScheduleSolver:
             for subj in teacher.subjects:
                 teachers_by_subject.setdefault(subj, []).append(teacher)
 
+        fixed_teachers = self._fixed_teacher_by_class_subject()
+        if fixed_teachers:
+            logger.info(
+                f"Unterrichtsverteilung: {len(fixed_teachers)} "
+                f"Klasse-Fach-Zuweisungen fest vorgegeben"
+            )
+
         for cls in self.data.classes:
             coupled_subjects = self._coupling_covered.get(cls.id, set())
 
@@ -337,7 +344,13 @@ class ScheduleSolver:
                 if subject in coupled_subjects:
                     continue  # Wird über Kopplung abgedeckt
 
-                qualified = teachers_by_subject.get(subject, [])
+                # Vorgegebene Lehrkraft: nur für sie entstehen Variablen
+                # (auch fachfremd). Sonst alle Lehrkräfte mit dem Fach.
+                fixed_teacher = fixed_teachers.get((cls.id, subject))
+                if fixed_teacher is not None:
+                    qualified = [fixed_teacher]
+                else:
+                    qualified = teachers_by_subject.get(subject, [])
                 if not qualified:
                     continue
 
@@ -361,6 +374,25 @@ class ScheduleSolver:
                             tcsd_key = (teacher.id, cls.id, subject, day)
                             self._sidx_tcsd.setdefault(tcsd_key, []).append(svar)
 
+    def _require_teacher(self, teacher_id: str, context: str) -> Teacher:
+        """Lehrkraft zum Kürzel; ValueError bei unbekanntem Kürzel."""
+        for teacher in self.data.teachers:
+            if teacher.id == teacher_id:
+                return teacher
+        raise ValueError(
+            f"Unterrichtsverteilung ({context}): unbekanntes Kürzel "
+            f"'{teacher_id}'. Bitte zuerst den Machbarkeits-Check ausführen."
+        )
+
+    def _fixed_teacher_by_class_subject(self) -> dict[tuple, Teacher]:
+        """(Klasse, Fach) → vorgegebene Lehrkraft laut Unterrichtsverteilung."""
+        return {
+            (a.class_id, a.subject): self._require_teacher(
+                a.teacher_id, f"{a.class_id}/{a.subject}"
+            )
+            for a in self.data.fixed_assignments
+        }
+
     def _create_coupling_vars(self) -> None:
         """Variablen für Kopplungen."""
         tg = self.config.time_grid
@@ -383,7 +415,13 @@ class ScheduleSolver:
 
             # coupling_assign[k_id, group_idx, teacher_id] – wer unterrichtet die Gruppe
             for g_idx, group in enumerate(coupling.groups):
-                qualified = teachers_by_subject.get(group.subject, [])
+                if group.teacher_id:
+                    qualified = [self._require_teacher(
+                        group.teacher_id,
+                        f"Kopplung {coupling.id}, Gruppe {group.group_name}",
+                    )]
+                else:
+                    qualified = teachers_by_subject.get(group.subject, [])
                 for teacher in qualified:
                     key = (coupling.id, g_idx, teacher.id)
                     var = self._model.new_bool_var(

@@ -22,7 +22,9 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   "Unterrichtsverteilung" (Matrix Klasse × Fach, Zelle = Kürzel),
   optionales Kürzel je Kopplungsgruppe (`Name:Fach:Std:Kürzel`),
   Modell `FixedAssignment` und `SchoolData.fixed_assignments`.
-  Der Solver nutzt die Vorgaben noch nicht.
+- Der Solver berücksichtigt die vorgegebene Unterrichtsverteilung
+  (Klasse-Fach-Zuweisungen und Kopplungsgruppen, auch fachfremd) und
+  erzeugt dafür nur Variablen der vorgegebenen Lehrkraft.
 - Machbarkeits-Check prüft die Vorgaben (unbekannte Klasse/Kürzel,
   Fach nicht in der Stundentafel, Deputat-Max, Sperrzeiten,
   Deputat-Min erreichbar; fachfremder Einsatz als Warnung).
@@ -57,6 +59,8 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Sperrzeit gerechnet (bisher: Wochen-Slots minus Sperrzeiten). Zu
   hohe Vorgaben oder ein zu hohes Deputat-Min fallen damit vor dem
   Solver-Lauf auf statt als unerklärtes INFEASIBLE.
+- `solve --diagnose` rechnet mit der vorgegebenen Unterrichtsverteilung
+  (die Relaxierungen ließen sie bisher weg).
 - Validator meldete bei jedem Plan mit WPF-Kopplungen Fehlalarme
   (36-Klassen-Plan: 48 Fehler). Parallele Gruppen derselben Kopplung
   gelten nicht mehr als Klassen-Doppelbelegung, und WPF-Termine zählen

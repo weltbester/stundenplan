@@ -7,7 +7,13 @@ dist/
 build/
 .venv/
 venv/
+.macpro/
 .env
+.DS_Store
+
+# Echte Personaldaten (Namen, E-Mail-Adressen) — niemals committen
+lehrer.txt
+lehrer.xlsx
 
 # Generierte Konfiguration (nutzerspezifisch)
 config/school_config.yaml

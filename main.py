@@ -382,14 +382,38 @@ def cmd_generate(seed: int, export_json: bool, json_path: str, run_validate: boo
 @click.command("template")
 @click.option("--output", "-o", default="output/import_vorlage.xlsx",
               help="Ausgabepfad für die Excel-Vorlage.")
-def cmd_template(output: str):
-    """Erzeugt eine leere Excel-Import-Vorlage."""
-    mgr, config = _load_config_or_abort()
-    from data.excel_import import generate_template
+@click.option("--from-data", "from_data", default=None,
+              type=click.Path(exists=True, path_type=Path),
+              help="Vorlage mit diesem Datensatz (JSON) ausfüllen.")
+@click.option("--from-solution", "from_solution", default=None,
+              type=click.Path(exists=True, path_type=Path),
+              help="Zusätzlich die Unterrichtsverteilung dieser Lösung "
+                   "eintragen (nur mit --from-data).")
+def cmd_template(
+    output: str, from_data: Optional[Path], from_solution: Optional[Path]
+):
+    """Erzeugt die Excel-Import-Vorlage (leer oder aus einem Datensatz).
 
+    Mit [cyan]--from-data[/cyan] werden Lehrkräfte, Kopplungen und bereits
+    feste Zuweisungen eingetragen; [cyan]--from-solution[/cyan] ergänzt die
+    Unterrichtsverteilung eines berechneten Plans.
+    """
     out_path = Path(output)
-    console.print(f"[bold]Excel-Vorlage wird erzeugt...[/bold]")
-    generate_template(config, out_path)
+    if from_solution and not from_data:
+        console.print(
+            "[red]--from-solution benötigt zusätzlich --from-data.[/red]"
+        )
+        sys.exit(1)
+
+    if from_data:
+        _write_filled_template(out_path, from_data, from_solution)
+    else:
+        mgr, config = _load_config_or_abort()
+        from data.excel_import import generate_template
+
+        console.print("[bold]Excel-Vorlage wird erzeugt...[/bold]")
+        generate_template(config, out_path)
+
     console.print(f"[green]✓[/green] Vorlage gespeichert: {out_path}")
     console.print(
         "\nBlätter in der Vorlage:\n"
@@ -398,8 +422,30 @@ def cmd_template(output: str):
         "  [cyan]Stundentafel[/cyan]  – Fach × Jahrgang Matrix (vorausgefüllt)\n"
         "  [cyan]Lehrkräfte[/cyan]    – Eingabe: Name, Kürzel, Fächer, Deputat, ...\n"
         "  [cyan]Fachräume[/cyan]     – Fachraum-Typen und Anzahl\n"
-        "  [cyan]Kopplungen[/cyan]    – Reli/Ethik + WPF Kopplungen"
+        "  [cyan]Kopplungen[/cyan]    – Reli/Ethik + WPF Kopplungen\n"
+        "  [cyan]Unterrichtsverteilung[/cyan] – Klasse × Fach: Kürzel der "
+        "Lehrkraft (leer = Solver entscheidet)"
     )
+
+
+def _write_filled_template(
+    out_path: Path, data_path: Path, solution_path: Optional[Path]
+) -> None:
+    """Schreibt die Vorlage, ausgefüllt aus Datensatz und ggf. Lösung."""
+    from data.excel_data_export import export_workbook
+    from models.school_data import SchoolData
+    from solver.scheduler import ScheduleSolution
+
+    data = SchoolData.load_json(data_path)
+    solution = (
+        ScheduleSolution.load_json(solution_path) if solution_path else None
+    )
+    console.print(f"[bold]Vorlage wird ausgefüllt aus:[/bold] {data_path}")
+    export_workbook(data, out_path, solution)
+    if solution is not None:
+        console.print(
+            f"[dim]Unterrichtsverteilung übernommen aus {solution_path}[/dim]"
+        )
 
 
 # ─── IMPORT ───────────────────────────────────────────────────────────────────

@@ -91,6 +91,8 @@ python main.py generate --export-json  # Testdaten + JSON speichern
 python main.py generate --seed 123     # Reproduzierbare Daten (Seed)
 
 python main.py template                # Excel-Import-Vorlage erzeugen
+python main.py template --from-data output/school_data.json \
+    --from-solution output/solution.json   # Vorlage aus Datensatz + Plan
 python main.py import lehrkraefte.xlsx # Echte Schuldaten aus Excel importieren
 python main.py validate                # Machbarkeits-Check (ohne Lösung)
 python main.py validate --solution     # Lösung zusätzlich validieren
@@ -257,9 +259,47 @@ Die Vorlage enthält folgende Tabellenblätter:
 | Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten |
 | Fachräume | Raumtyp, Name, Anzahl |
 | Kopplungen | Jahrgang, Typ, Klassen, Gruppen, Stunden |
+| Unterrichtsverteilung | Klasse × Fach: Kürzel der Lehrkraft |
 
 Sperrzeiten-Format in der Lehrkräfte-Liste: `Mo1,Di3,Fr5`
 (Tag + Slot-Nummer, kommagetrennt)
+
+### Unterrichtsverteilung vorgeben
+
+Im Blatt **Unterrichtsverteilung** steht pro Klasse eine Zeile und pro
+Fach eine Spalte. In die Zelle kommt das Kürzel der Lehrkraft, die das
+Fach in dieser Klasse unterrichtet.
+
+| Klasse | Deutsch | Mathematik | Physik | Religion |
+|--------|---------|------------|--------|----------|
+| 5a     | MÜL     |            | –      | Kopplung |
+| 7a     | BE      | BT         | SHR    | Kopplung |
+
+- **Leere Zelle**: der Solver entscheidet.
+- **`–`**: die Klasse hat das Fach nicht (nichts eintragen).
+- **`Kopplung`**: das Fach läuft über eine Kopplung. Die Lehrkraft wird im
+  Blatt *Kopplungen* als vierter Teil der Gruppe angegeben:
+  `evangelisch:Religion:2:SHN,ethik:Ethik:2:WAR`.
+
+Der Import meldet Fehler mit Zellbezug (z.B. `Unterrichtsverteilung B2
+(Klasse 5a, Fach Deutsch): Unbekanntes Kürzel 'XYZ'`). Der
+Machbarkeits-Check prüft zusätzlich: Deputat-Max und Sperrzeiten nicht
+überschritten, Deputat-Min noch erreichbar, genau eine Lehrkraft pro
+Klasse und Fach. Fachfremder Einsatz ist erlaubt und ergibt eine Warnung.
+
+Eine ausgefüllte Vorlage aus vorhandenen Daten erzeugen (z.B. um die
+Verteilung eines berechneten Plans anzusehen, zu ändern und wieder zu
+importieren):
+
+```bash
+python main.py template -o output/verteilung.xlsx \
+    --from-data output/school_data.json \
+    --from-solution output/solution.json
+python main.py import output/verteilung.xlsx --save-json
+```
+
+> Stand: Die Vorgaben werden importiert, geprüft und gespeichert. Der
+> Solver berücksichtigt sie ab dem nächsten Entwicklungsschritt.
 
 ---
 

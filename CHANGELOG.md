@@ -18,6 +18,17 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 - Harte Regel C15: pro Klasse, Fach und Tag höchstens eine Stunde oder
   ein Doppelstunden-Block (auch für Kopplungen).
 - Validator-Prüfung `subject_day_limit` für dieselbe Regel.
+- Unterrichtsverteilung als Eingabe: neues Excel-Blatt
+  "Unterrichtsverteilung" (Matrix Klasse × Fach, Zelle = Kürzel),
+  optionales Kürzel je Kopplungsgruppe (`Name:Fach:Std:Kürzel`),
+  Modell `FixedAssignment` und `SchoolData.fixed_assignments`.
+  Der Solver nutzt die Vorgaben noch nicht.
+- Machbarkeits-Check prüft die Vorgaben (unbekannte Klasse/Kürzel,
+  Fach nicht in der Stundentafel, Deputat-Max, Sperrzeiten,
+  Deputat-Min erreichbar; fachfremder Einsatz als Warnung).
+- `template --from-data … [--from-solution …]` schreibt eine
+  ausgefüllte, wieder importierbare Vorlage aus einem Datensatz und
+  optional der Unterrichtsverteilung eines Plans.
 
 ### Changed
 - Das Soft-Ziel "Hauptfach-Verteilung" ist entfernt: es belohnte das

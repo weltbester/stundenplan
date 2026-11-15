@@ -10,6 +10,9 @@ from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.room import Room
 from models.coupling import Coupling
+from models.fixed_assignment import (
+    FixedAssignment, check_fixed_assignments,
+)
 from config.schema import SchoolConfig
 
 
@@ -56,6 +59,8 @@ class SchoolData(BaseModel):
     teachers: list[Teacher]
     couplings: list[Coupling]
     config: SchoolConfig
+    # Vorgegebene Unterrichtsverteilung (leer = Solver entscheidet alles)
+    fixed_assignments: list[FixedAssignment] = []
 
     # ─── Übersicht ───
 
@@ -78,6 +83,11 @@ class SchoolData(BaseModel):
             f"Räume (Fachräume): {len(self.rooms)}",
             f"Kopplungen: {len(self.couplings)}",
         ]
+        if self.fixed_assignments:
+            lines.append(
+                f"Unterrichtsverteilung: {len(self.fixed_assignments)} "
+                f"Klasse-Fach-Zuweisungen fest vorgegeben"
+            )
         return "\n".join(l for l in lines if l)
 
     # ─── Machbarkeits-Check ───
@@ -91,6 +101,7 @@ class SchoolData(BaseModel):
         3. Jeder Lehrer: freie Slots ≥ Deputat
         4. Kopplungen: qualifizierte Lehrer vorhanden
         5. Gesamtbilanz: Summe Deputate ≥ Summe Stundenbedarf
+        6. Vorgegebene Unterrichtsverteilung: Verweise, Deputat, Sperrzeiten
         """
         errors: list[str] = []
         warnings: list[str] = []
@@ -273,6 +284,14 @@ class SchoolData(BaseModel):
                         f"Kopplung '{coupling.id}', Gruppe '{group.group_name}': "
                         f"Kein Lehrer für Fach '{group.subject}' vorhanden!"
                     )
+
+        # ── 6. Vorgegebene Unterrichtsverteilung ─────────────────────────
+        fixed_errors, fixed_warnings = check_fixed_assignments(
+            self.fixed_assignments, self.classes, self.teachers,
+            self.couplings, total_slots_per_week,
+        )
+        errors.extend(fixed_errors)
+        warnings.extend(fixed_warnings)
 
         return FeasibilityReport(
             is_feasible=len(errors) == 0,

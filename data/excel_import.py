@@ -15,11 +15,38 @@ from models.school_class import SchoolClass
 from models.subject import Subject
 from models.room import Room
 from models.coupling import Coupling, CouplingGroup
+from models.fixed_assignment import (
+    FixedAssignment, coupling_subjects_by_class,
+)
 from models.school_data import SchoolData, FeasibilityReport
 
 
 class ExcelImportError(Exception):
     """Fehler beim Excel-Import."""
+
+
+# ─── Blatt "Unterrichtsverteilung" ────────────────────────────────────────────
+
+ASSIGNMENT_SHEET = "Unterrichtsverteilung"
+CLASS_HEADER = "Klasse"
+# Zellmarken der Vorlage: Fach wird nicht unterrichtet / läuft über Kopplung
+NOT_TAUGHT_MARK = "–"
+COUPLING_MARK = "Kopplung"
+HINT_PREFIX = "Hinweis"
+ASSIGNMENT_HINT = (
+    f"{HINT_PREFIX}: In die Zelle das Kürzel der Lehrkraft eintragen. "
+    f"Leer = der Solver entscheidet. '{NOT_TAUGHT_MARK}' = Fach wird in "
+    f"dieser Klasse nicht unterrichtet. '{COUPLING_MARK}' = Lehrkraft im "
+    f"Blatt 'Kopplungen' angeben (Name:Fach:Std:Kürzel)."
+)
+# Zellinhalte (kleingeschrieben), die wie eine leere Zelle behandelt werden
+_BLANK_CELL_MARKS = frozenset({"", "–", "-", "—", COUPLING_MARK.lower()})
+_DEFAULT_CLASS_LABELS = "abcdefghij"
+_HEADER_COLOR = "2E6DA4"
+_LOCKED_COLOR = "E0E0E0"
+_BORDER_COLOR = "BBBBBB"
+_CLASS_COLUMN_WIDTH = 10
+_SUBJECT_COLUMN_WIDTH = 13
 
 
 # ─── Tages-Mapping ────────────────────────────────────────────────────────────
@@ -72,6 +99,20 @@ def _fuzzy_subject(name: str, known: list[str]) -> Optional[str]:
     return matches[0] if matches else None
 
 
+def _cell_text(row: tuple, column: int) -> str:
+    """Zellinhalt als getrimmter Text; leere/fehlende Zelle → ''."""
+    if column >= len(row) or row[column] is None:
+        return ""
+    return str(row[column]).strip()
+
+
+def _cell_ref(column: int, row_number: int) -> str:
+    """Excel-Zellbezug (z.B. 'C5') für 0-basierte Spalte, 1-basierte Zeile."""
+    from openpyxl.utils import get_column_letter
+
+    return f"{get_column_letter(column + 1)}{row_number}"
+
+
 # ─── TEMPLATE-GENERATOR ───────────────────────────────────────────────────────
 
 def generate_template(config: SchoolConfig, path: Path) -> None:
@@ -84,6 +125,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
       - Lehrkräfte:    Eingabe-Vorlage mit Beispielzeile
       - Fachräume:     Raumtyp, Name, Anzahl
       - Kopplungen:    Jahrgang, Typ, Klassen, Gruppen, Stunden
+      - Unterrichtsverteilung: Matrix Klasse × Fach (Kürzel je Zelle)
     """
     try:
         import openpyxl
@@ -259,7 +301,8 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     ws_kp = wb.create_sheet("Kopplungen")
     kp_headers = [
         "ID", "Typ (reli_ethik/wpf)", "Beteiligte Klassen (kommagetrennt)",
-        "Gruppen (Name:Fach:Std, kommagetrennt)", "Stunden/Woche", "Klassenübergreifend",
+        "Gruppen (Name:Fach:Std[:Kürzel], kommagetrennt)",
+        "Stunden/Woche", "Klassenübergreifend",
     ]
     for col, h in enumerate(kp_headers, 1):
         style_header(ws_kp.cell(row=1, column=col, value=h))
@@ -276,10 +319,93 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     for col, val in enumerate(ex_kp, 1):
         style_example(ws_kp.cell(row=2, column=col, value=val))
 
+    # ── Blatt 7: Unterrichtsverteilung ────────────────────────────────────────
+    _write_assignment_sheet(wb, config)
+
     # ── Speichern ─────────────────────────────────────────────────────────────
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(path))
+
+
+def _template_classes(config: SchoolConfig) -> list[tuple[str, int]]:
+    """(Klassen-ID, Jahrgang) für alle Klassen der Konfiguration."""
+    classes: list[tuple[str, int]] = []
+    for grade_def in config.grades.grades:
+        labels = grade_def.class_labels or list(
+            _DEFAULT_CLASS_LABELS[:grade_def.num_classes]
+        )
+        classes.extend((f"{grade_def.grade}{label}", grade_def.grade)
+                       for label in labels)
+    return classes
+
+
+def _config_coupled_subjects(config: SchoolConfig, grade: int) -> set[str]:
+    """Fächer, die laut Konfiguration im Jahrgang über Kopplungen laufen."""
+    coupling_config = config.couplings
+    coupled: set[str] = set()
+    if coupling_config.reli_ethik_enabled:
+        coupled.update({"Religion", "Ethik"})
+    if coupling_config.wpf_enabled and grade >= coupling_config.wpf_start_grade:
+        coupled.add("WPF")
+    return coupled
+
+
+def _assignment_cell_mark(
+    config: SchoolConfig, grade: int, subject: str
+) -> Optional[str]:
+    """Vorbelegung einer Matrix-Zelle; None = Zelle ist auszufüllen."""
+    hours = STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).get(subject, 0)
+    if hours <= 0:
+        return NOT_TAUGHT_MARK
+    if subject in _config_coupled_subjects(config, grade):
+        return COUPLING_MARK
+    return None
+
+
+def _write_assignment_sheet(workbook, config: SchoolConfig) -> None:
+    """Matrix Klasse × Fach für die vorgegebene Unterrichtsverteilung."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    side = Side(style="thin", color=_BORDER_COLOR)
+    border = Border(left=side, right=side, top=side, bottom=side)
+    center = Alignment(horizontal="center", vertical="center")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor=_HEADER_COLOR)
+    locked_fill = PatternFill("solid", fgColor=_LOCKED_COLOR)
+
+    classes = _template_classes(config)
+    grades = {grade for _, grade in classes}
+    subjects = [
+        name for name in SUBJECT_METADATA
+        if any(STUNDENTAFEL_GYMNASIUM_SEK1.get(g, {}).get(name, 0) > 0
+               for g in grades)
+    ]
+
+    sheet = workbook.create_sheet(ASSIGNMENT_SHEET)
+    for column, title in enumerate([CLASS_HEADER] + subjects, 1):
+        cell = sheet.cell(row=1, column=column, value=title)
+        cell.font, cell.fill = header_font, header_fill
+        cell.alignment, cell.border = center, border
+        width = _CLASS_COLUMN_WIDTH if column == 1 else _SUBJECT_COLUMN_WIDTH
+        sheet.column_dimensions[get_column_letter(column)].width = width
+
+    for row, (class_id, grade) in enumerate(classes, 2):
+        class_cell = sheet.cell(row=row, column=1, value=class_id)
+        class_cell.font, class_cell.border = Font(bold=True), border
+        for column, subject in enumerate(subjects, 2):
+            mark = _assignment_cell_mark(config, grade, subject)
+            cell = sheet.cell(row=row, column=column, value=mark)
+            cell.alignment, cell.border = center, border
+            if mark is not None:
+                cell.fill = locked_fill
+
+    hint_row = len(classes) + 3
+    sheet.cell(row=hint_row, column=1, value=ASSIGNMENT_HINT).font = Font(
+        italic=True
+    )
+    sheet.freeze_panes = "B2"
 
 
 # ─── IMPORT ───────────────────────────────────────────────────────────────────
@@ -578,8 +704,11 @@ class ExcelImporter:
             ctype = row.get("typ (reli_ethik/wpf)", row.get("typ", "")).strip().lower()
             classes_raw = row.get("beteiligte klassen (kommagetrennt)",
                                   row.get("klassen", "")).strip()
-            groups_raw = row.get("gruppen (name:fach:std, kommagetrennt)",
-                                 row.get("gruppen", "")).strip()
+            groups_raw = row.get(
+                "gruppen (name:fach:std[:kürzel], kommagetrennt)",
+                row.get("gruppen (name:fach:std, kommagetrennt)",
+                        row.get("gruppen", "")),
+            ).strip()
             hours_raw = row.get("stunden/woche", row.get("stunden", "2")).strip()
             cross_raw = row.get("klassenübergreifend", "ja").strip().lower()
 
@@ -588,7 +717,7 @@ class ExcelImporter:
 
             class_ids = [c.strip() for c in classes_raw.split(",") if c.strip()]
 
-            # Gruppen parsen: "Name:Fach:Std,..."
+            # Gruppen parsen: "Name:Fach:Std[:Kürzel],..."
             groups = []
             for gpart in groups_raw.split(","):
                 parts = gpart.strip().split(":")
@@ -600,10 +729,12 @@ class ExcelImporter:
                         ghours = int(ghours_raw) if ghours_raw else 2
                     except ValueError:
                         ghours = 2
+                    teacher_id = parts[3] if len(parts) > 3 else None
                     groups.append(CouplingGroup(
                         group_name=gname,
                         subject=gsubj,
                         hours_per_week=ghours,
+                        teacher_id=teacher_id,
                     ))
 
             try:
@@ -626,6 +757,126 @@ class ExcelImporter:
             ))
 
         return couplings
+
+    # ── Unterrichtsverteilung ──────────────────────────────────────────────
+
+    def import_assignments(
+        self,
+        classes: list[SchoolClass],
+        teachers: list[Teacher],
+        couplings: list[Coupling],
+    ) -> list[FixedAssignment]:
+        """Liest die Matrix Klasse × Fach (Zelle = Kürzel der Lehrkraft).
+
+        Das Blatt ist optional; leere Zellen entscheidet der Solver.
+        Fehler nennen die Zelle (z.B. "C5"), damit sie auffindbar ist.
+        """
+        sheet = self._get_sheet(ASSIGNMENT_SHEET)
+        if sheet is None:
+            return []
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return []
+
+        subject_columns = self._assignment_columns(rows[0])
+        class_by_key = {cls.id.lower(): cls for cls in classes}
+        teacher_ids = {teacher.id for teacher in teachers}
+        covered = coupling_subjects_by_class(couplings)
+
+        assignments: list[FixedAssignment] = []
+        seen_classes: set[str] = set()
+        for row_number, row in enumerate(rows[1:], 2):
+            school_class = self._assignment_row_class(
+                row, row_number, class_by_key, seen_classes
+            )
+            if school_class is None:
+                continue
+            for column, subject in subject_columns.items():
+                assignment = self._assignment_from_cell(
+                    _cell_text(row, column), _cell_ref(column, row_number),
+                    school_class, subject, teacher_ids,
+                    covered.get(school_class.id, set()),
+                )
+                if assignment is not None:
+                    assignments.append(assignment)
+        return assignments
+
+    def _assignment_columns(self, header: tuple) -> dict[int, str]:
+        """Spaltenindex (0-basiert) → Fachname laut Kopfzeile."""
+        columns: dict[int, str] = {}
+        for column in range(1, len(header)):
+            raw = _cell_text(header, column)
+            if not raw:
+                continue
+            location = f"{ASSIGNMENT_SHEET} {_cell_ref(column, 1)}"
+            subject = self._parse_subject(raw, location)
+            if subject:
+                columns[column] = subject
+        return columns
+
+    def _assignment_row_class(
+        self,
+        row: tuple,
+        row_number: int,
+        class_by_key: dict[str, SchoolClass],
+        seen_classes: set[str],
+    ) -> Optional[SchoolClass]:
+        """Klasse der Zeile; None bei Leer-/Hinweiszeile oder Fehler."""
+        raw = _cell_text(row, 0)
+        if not raw or raw.startswith(HINT_PREFIX):
+            return None
+        location = f"{ASSIGNMENT_SHEET} {_cell_ref(0, row_number)}"
+        school_class = class_by_key.get(raw.lower())
+        if school_class is None:
+            self._errors.append(f"{location}: Unbekannte Klasse '{raw}'.")
+            return None
+        if school_class.id in seen_classes:
+            self._errors.append(
+                f"{location}: Klasse '{school_class.id}' steht mehrfach "
+                f"im Blatt."
+            )
+            return None
+        seen_classes.add(school_class.id)
+        return school_class
+
+    def _assignment_from_cell(
+        self,
+        raw: str,
+        cell_ref: str,
+        school_class: SchoolClass,
+        subject: str,
+        teacher_ids: set[str],
+        coupled_subjects: set[str],
+    ) -> Optional[FixedAssignment]:
+        """Wertet eine Zelle aus; None = keine Vorgabe oder Fehler."""
+        if raw.lower() in _BLANK_CELL_MARKS:
+            return None
+        location = (
+            f"{ASSIGNMENT_SHEET} {cell_ref} "
+            f"(Klasse {school_class.id}, Fach {subject})"
+        )
+        teacher_id = raw.upper()
+        if school_class.curriculum.get(subject, 0) <= 0:
+            self._errors.append(
+                f"{location}: Das Fach steht nicht in der Stundentafel "
+                f"dieser Klasse, '{raw}' kann hier nicht eingetragen werden."
+            )
+            return None
+        if subject in coupled_subjects:
+            self._warnings.append(
+                f"{location}: Das Fach läuft über eine Kopplung, der "
+                f"Eintrag '{raw}' wird ignoriert. Lehrkraft im Blatt "
+                f"'Kopplungen' angeben."
+            )
+            return None
+        if teacher_id not in teacher_ids:
+            self._errors.append(
+                f"{location}: Unbekanntes Kürzel '{raw}'."
+            )
+            return None
+        return FixedAssignment(
+            class_id=school_class.id, subject=subject, teacher_id=teacher_id
+        )
 
     # ── Vollständiger Import ───────────────────────────────────────────────
 
@@ -680,6 +931,11 @@ class ExcelImporter:
             self._warnings.append(f"Kopplungen: {e}")
             couplings = []
 
+        # Unterrichtsverteilung (optional)
+        fixed_assignments = self.import_assignments(
+            classes, teachers, couplings
+        )
+
         if self._errors:
             # Kritische Fehler: Report zurückgeben, kein SchoolData
             report = FeasibilityReport(
@@ -699,6 +955,7 @@ class ExcelImporter:
             teachers=teachers,
             couplings=couplings,
             config=self.config,
+            fixed_assignments=fixed_assignments,
         )
 
         # Machbarkeits-Check nach Import

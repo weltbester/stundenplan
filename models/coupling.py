@@ -1,6 +1,8 @@
 """Datenmodell für Kopplungen (klassenübergreifender Unterricht, Pydantic v2)."""
 
-from pydantic import BaseModel
+from typing import Optional
+
+from pydantic import BaseModel, field_validator
 
 COUPLING_TYPE_WPF = "wpf"
 # Unter diesem Fachnamen steht der Wahlpflichtbereich in der Stundentafel.
@@ -10,12 +12,22 @@ WPF_CURRICULUM_SUBJECT = "WPF"
 class CouplingGroup(BaseModel):
     """Eine Gruppe innerhalb einer Kopplung (z.B. "evangelisch" bei Reli/Ethik).
 
-    Die Lehrerzuweisung ist eine Solver-Entscheidung und wird hier NICHT gespeichert.
+    Die Lehrkraft bestimmt normalerweise der Solver; mit `teacher_id`
+    kann sie fest vorgegeben werden.
     """
 
     group_name: str      # "evangelisch", "Informatik-WPF"
     subject: str         # Unterrichtetes Fach (z.B. "Religion", "Informatik")
     hours_per_week: int  # Wochenstunden dieser Gruppe
+    # Vorgegebene Lehrkraft (Kürzel); None = Solver entscheidet
+    teacher_id: Optional[str] = None
+
+    @field_validator("teacher_id")
+    @classmethod
+    def normalize_teacher_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        return value.strip().upper()
 
 
 class Coupling(BaseModel):

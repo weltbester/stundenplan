@@ -408,6 +408,10 @@ class FakeDataGenerator:
 
     # ─── Kopplungen ───────────────────────────────────────────────────────────
 
+    def generate_couplings(self) -> list[Coupling]:
+        """Kopplungen laut Konfiguration (deterministisch, ohne Zufall)."""
+        return self._generate_couplings(self._generate_classes())
+
     def _generate_couplings(self, classes: list[SchoolClass]) -> list[Coupling]:
         """Erzeugt Kopplungen für Reli/Ethik und WPF gemäß CouplingConfig."""
         cc = self.config.couplings

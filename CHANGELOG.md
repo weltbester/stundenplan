@@ -42,6 +42,16 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   die fremde venv `.macpro/` und `.DS_Store` werden ignoriert.
 
 ### Fixed
+- Excel-Import: Das Blatt "Stundentafel" wird jetzt eingelesen; bisher
+  galt immer die eingebaute Stundentafel, Änderungen im Blatt blieben
+  wirkungslos.
+- Excel-Vorlage: keine Beispielzeile mehr im Blatt "Fachräume" (sie
+  wurde als zwei zusätzliche Sporthallen mit doppelten IDs importiert);
+  Raum-IDs sind auch bei mehrfach genanntem Raumtyp eindeutig.
+- Excel-Import: Lehrkräfte mit dem Kürzel `MÜL` werden nicht mehr
+  übersprungen; die Beispielzeile wird am Präfix `Beispiel:` erkannt.
+- Excel-Vorlage: Das Blatt "Kopplungen" enthält alle Kopplungen laut
+  Konfiguration statt nur einer Beispielzeile für Jahrgang 5.
 - Validator meldete bei jedem Plan mit WPF-Kopplungen Fehlalarme
   (36-Klassen-Plan: 48 Fehler). Parallele Gruppen derselben Kopplung
   gelten nicht mehr als Klassen-Doppelbelegung, und WPF-Termine zählen

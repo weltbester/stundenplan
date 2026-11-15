@@ -255,14 +255,22 @@ Die Vorlage enthält folgende Tabellenblätter:
 |-------|--------|
 | Zeitraster | Slot-Nummern, Uhrzeiten, Sek-II-only-Flag |
 | Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden |
-| Stundentafel | Jahrgang × Fach = Wochenstunden |
+| Stundentafel | Jahrgang × Fach = Wochenstunden (wird importiert; leere Zelle = Fach entfällt) |
 | Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten |
 | Fachräume | Raumtyp, Name, Anzahl |
-| Kopplungen | Jahrgang, Typ, Klassen, Gruppen, Stunden |
+| Kopplungen | Typ, Klassen, Gruppen, Stunden (aus der Konfiguration vorausgefüllt) |
 | Unterrichtsverteilung | Klasse × Fach: Kürzel der Lehrkraft |
 
 Sperrzeiten-Format in der Lehrkräfte-Liste: `Mo1,Di3,Fr5`
 (Tag + Slot-Nummer, kommagetrennt)
+
+Hinweise zum Import:
+- Die Beispielzeile im Blatt *Lehrkräfte* beginnt mit `Beispiel:` und wird
+  übersprungen. Eigene Zeilen dürfen nicht so beginnen.
+- Es sind nur die im Programm bekannten Fächer möglich; unbekannte
+  Fachnamen führen zu einem Fehler mit Zellbezug.
+- Steht ein Raumtyp in mehreren Zeilen, werden die Räume zusammengezählt
+  (mit Warnung).
 
 ### Unterrichtsverteilung vorgeben
 

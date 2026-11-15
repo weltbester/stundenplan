@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from data.excel_import import (
-    _DAY_NAMES, ASSIGNMENT_SHEET, generate_template,
+    _DAY_NAMES, ASSIGNMENT_SHEET, coupling_row, generate_template,
 )
 from models.coupling import Coupling
 from models.fixed_assignment import FixedAssignment
@@ -18,12 +18,10 @@ from models.teacher import Teacher
 from solver.scheduler import ScheduleSolution
 
 TEACHER_SHEET = "Lehrkräfte"
-ROOM_SHEET = "Fachräume"
 COUPLING_SHEET = "Kopplungen"
 # Zeile 1 = Kopfzeile, Zeile 2 = Beispielzeile der Vorlage
 FIRST_TEACHER_ROW = 3
 FIRST_COUPLING_ROW = 2
-FIRST_ROOM_ROW = 2
 MAX_SUBJECT_COLUMNS = 3
 YES, NO = "ja", "nein"
 
@@ -52,7 +50,6 @@ def export_workbook(
         couplings = couplings_with_solution_teachers(couplings, solution)
 
     _fill_teachers(workbook[TEACHER_SHEET], data)
-    _clear_room_example(workbook[ROOM_SHEET], data)
     _fill_couplings(workbook[COUPLING_SHEET], couplings)
     _fill_assignments(workbook[ASSIGNMENT_SHEET], assignments)
     workbook.save(path)
@@ -130,36 +127,13 @@ def _fill_teachers(sheet, data: SchoolData) -> None:
             sheet.cell(row=row, column=column, value=value)
 
 
-def _clear_room_example(sheet, data: SchoolData) -> None:
-    """Entfernt die Beispielzeile, die der Import sonst als Raum einliest."""
-    example_row = FIRST_ROOM_ROW + len(data.config.rooms.special_rooms)
-    for cell in sheet[example_row]:
-        cell.value = None
-
-
-def _coupling_row(coupling: Coupling) -> list:
-    """Zeile im Blatt 'Kopplungen' (Gruppen als Name:Fach:Std[:Kürzel])."""
-    groups = []
-    for group in coupling.groups:
-        parts = [group.group_name, group.subject, str(group.hours_per_week)]
-        if group.teacher_id:
-            parts.append(group.teacher_id)
-        groups.append(":".join(parts))
-    return [
-        coupling.id,
-        coupling.coupling_type,
-        ",".join(coupling.involved_class_ids),
-        ",".join(groups),
-        coupling.hours_per_week,
-        YES if coupling.cross_class else NO,
-    ]
-
-
 def _fill_couplings(sheet, couplings: list[Coupling]) -> None:
-    for cell in sheet[FIRST_COUPLING_ROW]:
-        cell.value = None  # Beispielzeile der Vorlage entfernen
+    """Überschreibt die Zeilen der Vorlage mit den Kopplungen der Daten."""
+    for row in sheet.iter_rows(min_row=FIRST_COUPLING_ROW):
+        for cell in row:
+            cell.value = None
     for row, coupling in enumerate(couplings, FIRST_COUPLING_ROW):
-        for column, value in enumerate(_coupling_row(coupling), 1):
+        for column, value in enumerate(coupling_row(coupling), 1):
             sheet.cell(row=row, column=column, value=value)
 
 

@@ -5,6 +5,7 @@ Import-Funktion:    Excel → SchoolData mit Validierung und FeasibilityReport.
 """
 
 import difflib
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -40,8 +41,22 @@ ASSIGNMENT_HINT = (
     f"Blatt 'Kopplungen' angeben (Name:Fach:Std:Kürzel)."
 )
 # Zellinhalte (kleingeschrieben), die wie eine leere Zelle behandelt werden
+# Beispielzeile im Blatt "Lehrkräfte": Name beginnt mit diesem Wort.
+EXAMPLE_PREFIX = "Beispiel"
+# Beispielzeile älterer Vorlagen (ohne Präfix): nur exakt diese Zeile
+# wird übersprungen, eine echte Lehrkraft mit Kürzel MÜL nicht mehr.
+_LEGACY_EXAMPLE = {
+    "name": "Müller, Hans", "abbr": "MÜL",
+    "fach 1": "Mathematik", "fach 2": "Physik",
+    "sperrzeiten (z.b. mo1,di3,fr5)": "Mi5",
+    "wunschtage (z.b. mo,fr)": "Fr",
+}
 _BLANK_CELL_MARKS = frozenset({"", "–", "-", "—", COUPLING_MARK.lower()})
 _DEFAULT_CLASS_LABELS = "abcdefghij"
+CURRICULUM_SHEET = "Stundentafel"
+_GRADE_NUMBER_RE = re.compile(r"\d+")
+# Jahrgang → Fach → Wochenstunden
+CurriculumTable = dict[int, dict[str, int]]
 _HEADER_COLOR = "2E6DA4"
 _LOCKED_COLOR = "E0E0E0"
 _BORDER_COLOR = "BBBBBB"
@@ -97,6 +112,19 @@ def _fuzzy_subject(name: str, known: list[str]) -> Optional[str]:
     """Fuzzy-Matching: Findet das ähnlichste bekannte Fach."""
     matches = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
     return matches[0] if matches else None
+
+
+def _is_teacher_example(name: str, abbr: str, row: dict) -> bool:
+    """Erkennt die Beispielzeile der Vorlage (neu und alt)."""
+    if name.lower().startswith(EXAMPLE_PREFIX.lower()):
+        return True
+    if name != _LEGACY_EXAMPLE["name"] or abbr != _LEGACY_EXAMPLE["abbr"]:
+        return False
+    return all(
+        row.get(key, "").strip() == expected
+        for key, expected in _LEGACY_EXAMPLE.items()
+        if key not in ("name", "abbr")
+    )
 
 
 def _cell_text(row: tuple, column: int) -> str:
@@ -246,7 +274,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
 
     # Beispielzeile (kursiv)
     example_row = [
-        "Müller, Hans", "MÜL", "Mathematik", "Physik", "",
+        f"{EXAMPLE_PREFIX}: Müller, Hans", "MÜL", "Mathematik", "Physik", "",
         26, "nein", "Mi5", "Fr", 6, 2,
     ]
     for col, val in enumerate(example_row, 1):
@@ -291,11 +319,8 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         row_vals = [room_def.room_type, room_def.display_name, room_def.count]
         for col, val in enumerate(row_vals, 1):
             style_data(ws_fr.cell(row=r, column=col, value=val), alt=alt)
-
-    # Beispielzeile
-    example_fr = ["sport", "Sporthalle", 2]
-    for col, val in enumerate(example_fr, 1):
-        style_example(ws_fr.cell(row=len(config.rooms.special_rooms) + 2, column=col, value=val))
+    # Keine Beispielzeile: die Zeilen aus der Config dienen als Muster.
+    # (Eine Beispielzeile würde beim Import als echter Raum eingelesen.)
 
     # ── Blatt 6: Kopplungen ───────────────────────────────────────────────────
     ws_kp = wb.create_sheet("Kopplungen")
@@ -310,14 +335,15 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     for col, w in enumerate(widths_kp, 1):
         set_col_width(ws_kp, col, w)
 
-    # Beispiel-Kopplung
-    ex_kp = [
-        "reli_5", "reli_ethik", "5a,5b,5c,5d,5e,5f",
-        "evangelisch:Religion:2,katholisch:Religion:2,ethik:Ethik:2",
-        2, "ja",
-    ]
-    for col, val in enumerate(ex_kp, 1):
-        style_example(ws_kp.cell(row=2, column=col, value=val))
+    # Kopplungen laut Konfiguration (passend zu den "Kopplung"-Marken im
+    # Blatt Unterrichtsverteilung); Zeilen können angepasst werden.
+    from data.fake_data import FakeDataGenerator
+
+    config_couplings = FakeDataGenerator(config).generate_couplings()
+    for r, coupling in enumerate(config_couplings, 2):
+        for col, val in enumerate(coupling_row(coupling), 1):
+            style_data(ws_kp.cell(row=r, column=col, value=val),
+                       alt=(r % 2 == 0))
 
     # ── Blatt 7: Unterrichtsverteilung ────────────────────────────────────────
     _write_assignment_sheet(wb, config)
@@ -326,6 +352,24 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(path))
+
+
+def coupling_row(coupling: Coupling) -> list:
+    """Zeile im Blatt 'Kopplungen' (Gruppen als Name:Fach:Std[:Kürzel])."""
+    groups = []
+    for group in coupling.groups:
+        parts = [group.group_name, group.subject, str(group.hours_per_week)]
+        if group.teacher_id:
+            parts.append(group.teacher_id)
+        groups.append(":".join(parts))
+    return [
+        coupling.id,
+        coupling.coupling_type,
+        ",".join(coupling.involved_class_ids),
+        ",".join(groups),
+        coupling.hours_per_week,
+        "ja" if coupling.cross_class else "nein",
+    ]
 
 
 def _template_classes(config: SchoolConfig) -> list[tuple[str, int]]:
@@ -533,12 +577,11 @@ class ExcelImporter:
         tc = self.config.teachers
 
         for i, row in enumerate(rows, 2):
-            # Beispielzeilen (kursiv-Marker) überspringen anhand von Kürzel = MÜL
             abbr = row.get("kürzel", row.get("kurzel", "")).strip().upper()
             name = row.get("name (nachname, vorname)", row.get("name", "")).strip()
 
-            if not abbr or abbr == "MÜL":
-                continue  # Beispielzeile
+            if not abbr or _is_teacher_example(name, abbr, row):
+                continue  # Leer- oder Beispielzeile
             if abbr in used_ids:
                 self._errors.append(f"Zeile {i}: Doppeltes Kürzel '{abbr}'")
                 continue
@@ -619,6 +662,10 @@ class ExcelImporter:
 
         rows = self._sheet_rows(sheet)
         rooms = []
+        seen_types: set[str] = set()
+        # Fortlaufende Nummer je Kürzel-Präfix → eindeutige Raum-IDs,
+        # auch wenn ein Raumtyp in mehreren Zeilen steht.
+        next_index: dict[str, int] = {}
         for i, row in enumerate(rows, 2):
             rtype = row.get("raumtyp (intern)", row.get("raumtyp", "")).strip().lower()
             name = row.get("anzeigename", row.get("name", "")).strip()
@@ -632,19 +679,115 @@ class ExcelImporter:
             except ValueError:
                 count = 1
 
+            if rtype in seen_types:
+                self._warnings.append(
+                    f"Fachräume Zeile {i}: Raumtyp '{rtype}' steht "
+                    f"mehrfach im Blatt – die Räume werden zusammengezählt."
+                )
+            seen_types.add(rtype)
+
             prefix = rtype[:2].upper()
-            for idx in range(1, count + 1):
+            first_index = next_index.get(prefix, 1)
+            for idx in range(first_index, first_index + count):
                 rooms.append(Room(
                     id=f"{prefix}{idx}",
                     room_type=rtype,
                     name=f"{name} {idx}" if count > 1 else name,
                 ))
+            next_index[prefix] = first_index + count
 
         return rooms
 
+    # ── Stundentafel ───────────────────────────────────────────────────────
+
+    def import_curriculum(self) -> CurriculumTable:
+        """Liest das Blatt 'Stundentafel' (Fach × Jahrgang → Wochenstunden).
+
+        Leeres Ergebnis, wenn das Blatt fehlt: dann gilt die eingebaute
+        Stundentafel. Fehler nennen die Zelle.
+        """
+        sheet = self._get_sheet(CURRICULUM_SHEET)
+        if sheet is None:
+            return {}
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return {}
+
+        grade_columns = self._curriculum_grade_columns(rows[0])
+        table: CurriculumTable = {g: {} for g in grade_columns.values()}
+        for row_number, row in enumerate(rows[1:], 2):
+            raw_subject = _cell_text(row, 0)
+            if not raw_subject:
+                continue
+            location = f"{CURRICULUM_SHEET} {_cell_ref(0, row_number)}"
+            subject = self._parse_subject(raw_subject, location)
+            if subject is None:
+                continue
+            for column, grade in grade_columns.items():
+                hours = self._curriculum_hours(
+                    _cell_text(row, column), _cell_ref(column, row_number)
+                )
+                if hours > 0:
+                    table[grade][subject] = hours
+        return table
+
+    def _curriculum_grade_columns(self, header: tuple) -> dict[int, int]:
+        """Spaltenindex (0-basiert) → Jahrgang, aus Köpfen wie 'Jg. 5'."""
+        columns: dict[int, int] = {}
+        for column in range(1, len(header)):
+            raw = _cell_text(header, column)
+            if not raw:
+                continue
+            match = _GRADE_NUMBER_RE.search(raw)
+            if match:
+                columns[column] = int(match.group())
+            else:
+                self._warnings.append(
+                    f"{CURRICULUM_SHEET} {_cell_ref(column, 1)}: "
+                    f"Spalte '{raw}' enthält keinen Jahrgang und wird "
+                    f"ignoriert."
+                )
+        return columns
+
+    def _curriculum_hours(self, raw: str, cell_ref: str) -> int:
+        """Wochenstunden einer Zelle; leer = 0, ungültig = Fehler."""
+        if not raw:
+            return 0
+        try:
+            hours = int(float(raw))
+        except ValueError:
+            hours = -1
+        if hours < 0:
+            self._errors.append(
+                f"{CURRICULUM_SHEET} {cell_ref}: '{raw}' ist keine gültige "
+                f"Stundenzahl."
+            )
+            return 0
+        return hours
+
+    def _grade_curriculum(
+        self, grade: int, table: CurriculumTable
+    ) -> dict[str, int]:
+        """Stundentafel des Jahrgangs: aus dem Blatt, sonst eingebaut."""
+        if grade in table:
+            return dict(table[grade])
+        if table:
+            self._warnings.append(
+                f"{CURRICULUM_SHEET}: Jahrgang {grade} fehlt im Blatt – "
+                f"es gilt die eingebaute Stundentafel."
+            )
+        return {
+            subject: hours
+            for subject, hours
+            in STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).items()
+            if hours > 0
+        }
+
     # ── Klassen aus Jahrgänge-Blatt ────────────────────────────────────────
 
-    def import_classes(self) -> list[SchoolClass]:
+    def import_classes(
+        self, curriculum_table: Optional[CurriculumTable] = None
+    ) -> list[SchoolClass]:
         sheet = self._get_sheet("Jahrgänge")
         if sheet is None:
             # Fallback: Klassen aus Config ableiten
@@ -671,11 +814,9 @@ class ExcelImporter:
             except ValueError:
                 num_classes = 1
 
-            curriculum = {
-                f: h
-                for f, h in STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).items()
-                if h > 0
-            }
+            curriculum = self._grade_curriculum(
+                grade, curriculum_table or {}
+            )
 
             labels = list("abcdefghij"[:num_classes])
             for label in labels:
@@ -912,7 +1053,7 @@ class ExcelImporter:
 
         # Klassen
         try:
-            classes = self.import_classes()
+            classes = self.import_classes(self.import_curriculum())
         except ExcelImportError as e:
             self._errors.append(f"Klassen: {e}")
             classes = []

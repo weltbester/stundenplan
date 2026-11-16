@@ -1,8 +1,9 @@
 """Führt einen einzelnen Benchmark-Lauf aus und misst ihn.
 
-Der Solver wird nicht verändert: Messwerte stammen aus einer dünnen
-Unterklasse (Ende des Modellaufbaus) und aus den Log-Meldungen des
-Solvers (Warm-Start-Zeit, Verlauf des Zielfunktionswerts).
+Messwerte stammen aus einer dünnen Unterklasse (Ende des
+Modellaufbaus), aus den Log-Meldungen des Solvers (Warm-Start-Zeit,
+Verlauf des Zielfunktionswerts) und aus `search_limit_seconds`
+(Zeit, die der Suche nach Aufbau und Warm-Start blieb).
 """
 
 import logging
@@ -122,7 +123,7 @@ def capture_solver_log() -> Iterator[SolverLogCapture]:
 
 def late_gain_percent(
     trace: list[TracePoint],
-    time_limit: float,
+    search_seconds: float,
     window_fraction: float = LATE_WINDOW_FRACTION,
 ) -> Optional[float]:
     """Anteil der Gesamtverbesserung, der erst im Schlussfenster entstand.
@@ -130,6 +131,8 @@ def late_gain_percent(
     0 % = Zielfunktion war vor dem Schlussfenster bereits ausgereift.
     Hohe Werte = der Solver verbesserte bis zuletzt, das Zeitlimit schnitt
     die Optimierung ab. None, wenn weniger als zwei Lösungen vorliegen.
+    `search_seconds` ist die Zeit, die der Suche zur Verfügung stand
+    (Zeitlimit abzüglich Modellaufbau und Warm-Start).
     """
     if len(trace) < 2:
         return None
@@ -138,7 +141,7 @@ def late_gain_percent(
     total_gain = first_objective - final_objective
     if total_gain <= 0:
         return 0.0
-    cutoff = time_limit * (1.0 - window_fraction)
+    cutoff = search_seconds * (1.0 - window_fraction)
     before_window = [obj for elapsed, obj in trace if elapsed <= cutoff]
     if not before_window:
         return PERCENT
@@ -194,7 +197,9 @@ def run_once(
     severities = Counter(v.severity for v in validation.violations)
     return result.model_copy(update={
         "objective": solution.objective_value,
-        "late_gain_percent": late_gain_percent(capture.trace, time_limit),
+        "late_gain_percent": late_gain_percent(
+            capture.trace, solver.search_limit_seconds or time_limit
+        ),
         "total_gaps": quality.total_gaps,
         "bunched_subject_days": count_bunched_subject_days(solution),
         "validator_errors": severities["error"],

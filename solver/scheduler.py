@@ -26,6 +26,7 @@ from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.coupling import Coupling
 from solver.pinning import PinnedLesson
+from solver.time_budget import TimeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,9 @@ class ScheduleSolver:
         # Pins (werden von solve() gesetzt)
         self._pinned_lessons: list[PinnedLesson] = []
 
+        # Zeitlimit der Hauptsuche im letzten solve()-Lauf (Sekunden)
+        self.search_limit_seconds: Optional[float] = None
+
     # ─── Öffentliche API ──────────────────────────────────────────────────────
 
     def solve(
@@ -194,14 +198,21 @@ class ScheduleSolver:
         """Löst das Stundenplan-Problem und gibt eine Lösung zurück."""
         self._pinned_lessons = list(pins)
 
-        t0 = time.time()
+        # Das Zeitlimit gilt für den ganzen Lauf (Aufbau, Warm-Start, Suche).
+        budget = TimeBudget(self.config.solver.time_limit_seconds)
 
         self._build_slot_index()
         self._build_coupling_coverage()
         self._create_variables()
         self._add_constraints()
+        build_seconds = budget.elapsed()
+        if budget.is_exhausted():
+            logger.warning(
+                f"Modellaufbau ({build_seconds:.1f}s) hat das Zeitlimit "
+                f"({budget.limit_seconds:.0f}s) aufgebraucht – "
+                f"der Solver bekommt nur noch eine Mindestzeit."
+            )
 
-        time_limit = self.config.solver.time_limit_seconds
         num_workers = self.config.solver.num_workers or os.cpu_count() or 4
 
         # Deputat-Auslastung: immer als Core-Objective (auch bei --no-soft)
@@ -213,9 +224,10 @@ class ScheduleSolver:
         # Zuerst ohne Objective eine feasible Lösung finden, dann als Hint für Optimierung nutzen.
         needs_warmstart = bool(core_dep_terms) or use_soft
         if needs_warmstart:
-            pre_limit = min(90, time_limit // 3)
             pre_solver = cp_model.CpSolver()
-            pre_solver.parameters.max_time_in_seconds = pre_limit
+            pre_solver.parameters.max_time_in_seconds = (
+                budget.warmstart_limit()
+            )
             pre_solver.parameters.num_workers = num_workers
             pre_solver.parameters.log_search_progress = False
             pre_status = pre_solver.solve(self._model)
@@ -240,15 +252,22 @@ class ScheduleSolver:
             self._model.minimize(sum(core_dep_terms))
 
         # Solver konfigurieren
+        # Die Suche bekommt, was Aufbau und Warm-Start übrig lassen.
+        self.search_limit_seconds = budget.remaining()
+        logger.info(
+            f"Suche: {self.search_limit_seconds:.1f}s von "
+            f"{budget.limit_seconds:.0f}s Zeitlimit "
+            f"(Aufbau {build_seconds:.1f}s)"
+        )
         cp_solver = cp_model.CpSolver()
-        cp_solver.parameters.max_time_in_seconds = time_limit
+        cp_solver.parameters.max_time_in_seconds = self.search_limit_seconds
         cp_solver.parameters.num_workers = num_workers
         cp_solver.parameters.log_search_progress = False
 
         callback = SolveProgressCallback()
         status = cp_solver.solve(self._model, callback)
 
-        elapsed = time.time() - t0
+        elapsed = budget.elapsed()
         status_name = cp_solver.status_name(status)
 
         logger.info(

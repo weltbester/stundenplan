@@ -110,6 +110,11 @@ python main.py solve --weights gaps=200,double_lessons=80  # Gewichte anpassen
 python main.py solve --verbose         # Solver-Fortschritt anzeigen
 ```
 
+Das Zeitlimit gilt für den ganzen Lauf: Modellaufbau, Warm-Start
+(erste gültige Lösung) und Optimierung teilen sich die Zeit. Der
+Warm-Start bekommt höchstens ein Drittel der Zeit nach dem Aufbau
+(maximal 90 s), die Optimierung den Rest.
+
 ### Export
 
 ```bash
@@ -447,7 +452,8 @@ Tabelle genannt.
 |--------|-----------|
 | Aufbau s | Zeit für den Modellaufbau |
 | Erste Lösung s | Suchzeit bis zum ersten gültigen Plan |
-| Spätgewinn % | Anteil der Verbesserung in den letzten 20 % des Zeitlimits (nahe 0 = ausgereift) |
+| Gesamt s | Ganzer Lauf (Aufbau, Warm-Start, Optimierung); bleibt im Zeitlimit |
+| Spätgewinn % | Anteil der Verbesserung in den letzten 20 % der Optimierungszeit (nahe 0 = ausgereift) |
 | Fach-Häufungen | Klasse hat dasselbe Fach 3× oder öfter an einem Tag |
 | Validator-Fehler | Verstöße laut unabhängiger Nachprüfung |
 

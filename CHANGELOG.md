@@ -46,6 +46,14 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Gewicht nicht mehr ab.
 - `solve --small` schreibt nach `output/solution_small.json` und
   überschreibt die vollständige Lösung nicht mehr.
+- Das Zeitlimit (`--time-limit`, `time_limit_seconds`) gilt für den
+  ganzen Solver-Lauf. Bisher kamen Modellaufbau und Warm-Start oben
+  drauf (300 s Limit ergaben beim 36-Klassen-Datensatz rund 440 s).
+  Der Warm-Start bekommt höchstens ein Drittel der Zeit nach dem
+  Aufbau (maximal 90 s), die Optimierung den Rest
+  (`solver/time_budget.py`).
+- Benchmark: "Spätgewinn %" bezieht sich auf die Optimierungszeit
+  statt auf das ganze Zeitlimit.
 - `.gitignore`: echte Personaldaten (`lehrer.txt`, `lehrer.xlsx`),
   die fremde venv `.macpro/` und `.DS_Store` werden ignoriert.
 

@@ -190,14 +190,14 @@ class FakeDataGenerator:
         abbr = _make_abbreviation(last, self._used_abbreviations)
 
         tc = self.config.teachers
-        deputat_max = deputat + tc.deputat_max_buffer
-        deputat_min = max(1, round(deputat_max * tc.deputat_min_fraction))
+        deputat_min, deputat_max = tc.deputat_bounds(deputat)
         return Teacher(
             id=abbr,
             name=f"{last}, {first}",
             subjects=subjects,
             deputat_max=deputat_max,
             deputat_min=deputat_min,
+            deputat_soll=deputat,
             is_teilzeit=is_teilzeit,
             preferred_free_days=preferred_free_days or [],
             unavailable_slots=unavailable_slots or [],

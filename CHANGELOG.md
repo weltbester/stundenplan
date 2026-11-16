@@ -38,6 +38,17 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Machbarkeits-Check und `template --from-data` richten sich nach der
   Fächerliste des Datensatzes; Mappen ohne das Blatt und ältere
   JSON-Dateien funktionieren weiter.
+- Soll-Deputat je Lehrkraft (`deputat_soll`), auch mit halben Stunden:
+  die Spalte "Deputat" nimmt `25,5` an. Die ganzzahligen Grenzen für
+  den Solver werden daraus abgeleitet (aufgerundet + Puffer nach oben;
+  neu und optional `deputat_min_buffer` für "Soll minus n Stunden").
+  Ältere Datensätze ohne Soll funktionieren weiter (Soll = Obergrenze
+  minus Puffer).
+- Zusammenfassung nach `solve`, `show <Kürzel>`, Qualitätsbericht und
+  Excel-/PDF-Export zeigen Soll und Abweichung vom Soll.
+- Datensatz-Übersicht zeigt die Summe der Soll-Deputate; der
+  Machbarkeits-Check warnt, wenn sie mehr als 5 % vom Unterrichtsbedarf
+  abweicht.
 - Machbarkeits-Check meldet Fächer, die in Stundentafel, bei
   Lehrkräften oder in Kopplungen vorkommen, aber nicht in der
   Fächerliste stehen.
@@ -64,6 +75,15 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   (`solver/time_budget.py`).
 - Benchmark: "Spätgewinn %" bezieht sich auf die Optimierungszeit
   statt auf das ganze Zeitlimit.
+- Solver-Ziel "Deputat": bestraft jetzt den Abstand jeder Lehrkraft
+  von ihrem Soll (quadratisch, in halben Stunden). Der bisherige Term
+  (Summe aus Obergrenze minus Ist) war für jeden Plan gleich groß und
+  hatte keine Wirkung. Zielwerte sind dadurch nicht mehr mit älteren
+  Läufen vergleichbar.
+- Excel-Import: Ein ungültiges Deputat ist ein Fehler (bisher Warnung
+  und Vollzeit-Deputat); `25,5` wurde bisher stillschweigend zu 25.
+- Die Untergrenze aus `deputat_min_fraction` liegt nie mehr über dem
+  Soll (bei hohem Anteil und kleinem Deputat konnte sie das).
 - Excel-Import: Ein unbekannter Fachname ist immer ein Fehler. Bisher
   wurde ein ähnlich geschriebenes Fach mit einer Warnung eingesetzt
   (z.B. "Mathe" → "Mathematik"); jetzt wird es nur vorgeschlagen.

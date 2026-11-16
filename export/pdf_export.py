@@ -4,7 +4,7 @@ from pathlib import Path
 
 from config.schema import LessonSlot, PauseSlot
 from models.school_data import SchoolData
-from models.teacher import Teacher
+from models.teacher import Teacher, format_hours
 from solver.scheduler import ScheduleEntry, ScheduleSolution
 
 from export.helpers import (
@@ -232,9 +232,12 @@ class PdfExporter:
         for teacher in sorted(self.data.teachers, key=lambda t: t.id):
             entries = self.solution.get_teacher_schedule(teacher.id)
             actual = count_teacher_actual_hours(self.solution.entries, teacher.id)
+            soll = format_hours(teacher.target_hours(
+                self.data.config.teachers.deputat_max_buffer
+            ))
             entity = (
                 f"{teacher.id} - {teacher.name} "
-                f"| Min: {teacher.deputat_min}h-Max: {teacher.deputat_max}h | Ist: {actual}h"
+                f"| Soll: {soll}h | Ist: {actual}h"
             )
             pdf.set_entity(entity)
             max_slot = max(
@@ -322,8 +325,12 @@ class PdfExporter:
     ) -> None:
         """Zeichnet Statistik-Box unter dem Lehrerplan."""
         gaps = count_gaps(entries)
+        soll = format_hours(teacher.target_hours(
+            self.data.config.teachers.deputat_max_buffer
+        ))
         text = (
-            f"Deputat Min: {teacher.deputat_min}h | Max: {teacher.deputat_max}h  |  "
+            f"Deputat Soll: {soll}h | Min: {teacher.deputat_min}h | "
+            f"Max: {teacher.deputat_max}h  |  "
             f"Ist: {actual}h  |  Springstunden: {gaps}"
         )
         p = pdf._pdf

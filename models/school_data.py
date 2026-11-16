@@ -6,7 +6,9 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from models.subject import Subject
+from models.deputat_check import check_target_balance, total_target_hours
 from models.subject_check import check_subject_references
+from models.teacher import format_hours
 from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.room import Room
@@ -69,6 +71,9 @@ class SchoolData(BaseModel):
         """Kurze Übersicht über den Datensatz."""
         total_need = sum(sum(c.curriculum.values()) for c in self.classes)
         total_dep = sum(t.deputat_max for t in self.teachers)
+        total_soll = total_target_hours(
+            self.teachers, self.config.teachers.deputat_max_buffer
+        )
         num_teilzeit = sum(1 for t in self.teachers if t.is_teilzeit)
         lines = [
             f"Schule: {self.config.school_name}",
@@ -78,6 +83,7 @@ class SchoolData(BaseModel):
             f"Lehrkräfte: {len(self.teachers)} "
             f"({num_teilzeit} Teilzeit, {len(self.teachers)-num_teilzeit} Vollzeit)",
             f"Gesamtdeputat: {total_dep}h/Woche",
+            f"Soll-Deputate: {format_hours(total_soll)}h/Woche",
             f"Gesamtbedarf (Curriculum): {total_need}h/Woche",
             f"Puffer: {total_dep - total_need:+d}h "
             f"({(total_dep/total_need - 1)*100:.1f}%)" if total_need else "",
@@ -104,6 +110,7 @@ class SchoolData(BaseModel):
         5. Gesamtbilanz: Summe Deputate ≥ Summe Stundenbedarf
         6. Vorgegebene Unterrichtsverteilung: Verweise, Deputat, Sperrzeiten
         7. Alle verwendeten Fächer stehen in der Fächerliste
+        8. Soll-Deputate passen zum Unterrichtsbedarf (Warnung)
         """
         errors: list[str] = []
         warnings: list[str] = []
@@ -304,6 +311,12 @@ class SchoolData(BaseModel):
         # ── 7. Fächerliste ───────────────────────────────────────────────
         errors.extend(check_subject_references(
             self.subjects, self.classes, self.teachers, self.couplings
+        ))
+
+        # ── 8. Soll-Deputate gegen Bedarf ────────────────────────────────
+        warnings.extend(check_target_balance(
+            self.teachers, self.classes, self.couplings,
+            self.config.teachers.deputat_max_buffer,
         ))
 
         return FeasibilityReport(

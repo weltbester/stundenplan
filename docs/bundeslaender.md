@@ -112,7 +112,7 @@ davon ab. Alles Landesspezifische muss über die Eingabedaten kommen.
 | Anforderung | Stand | Anmerkung |
 |---|---|---|
 | Unterrichtsverteilung vor der Planung festgelegt | Ja | Blatt "Unterrichtsverteilung". Ermäßigungen, Hamburger Faktoren und bayerische Fachregeln sind damit schon vor dem Solver entschieden. |
-| Stundenzahl je Lehrkraft, Teilzeit | Teilweise | Je Lehrkraft, aber nur ganze Zahlen (25,5 oder 23,5 nicht eingebbar). |
+| Stundenzahl je Lehrkraft, Teilzeit | Ja | Soll-Deputat je Lehrkraft, auch halbe Stunden (25,5 oder 23,5); der Plan selbst hat ganze Stunden, die Abweichung vom Soll wird ausgewiesen. |
 | Stundentafel je Jahrgang | Ja | Über das Excel-Blatt "Stundentafel". |
 | Eingebaute Standard-Stundentafel | Nein | 28, 31, 34, 34, 34, 34 (Summe 195), Latein ab Kl. 6; entspricht keinem Land. |
 | G8 und G9 in verschiedenen Jahrgängen einer Schule | Ja | Jeder Jahrgang hat eine eigene Zeile. |

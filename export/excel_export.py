@@ -6,7 +6,7 @@ from typing import Optional
 
 from config.schema import LessonSlot, PauseSlot
 from models.school_data import SchoolData
-from models.teacher import Teacher
+from models.teacher import Teacher, format_hours
 from models.room import Room
 from solver.scheduler import ScheduleEntry, ScheduleSolution
 
@@ -255,7 +255,10 @@ class ExcelExporter:
         row += 2
 
         # Lehrer-Tabelle
-        headers = ["Kürzel", "Name", "Fächer", "Min", "Max", "Ist", "Springstd."]
+        headers = [
+            "Kürzel", "Name", "Fächer", "Min", "Max", "Ist", "Springstd.",
+            "Soll", "Δ Soll",
+        ]
         fill_h = self._fill(COLORS["header"])
         border = self._thin_border()
         for col, h in enumerate(headers, 1):
@@ -280,6 +283,11 @@ class ExcelExporter:
             if actual < teacher.deputat_min or actual > teacher.deputat_max:
                 c_ist.fill = self._fill("FFCCCC")
             ws.cell(row=row, column=7, value=gaps).border = border
+            soll = teacher.target_hours(
+                self.data.config.teachers.deputat_max_buffer
+            )
+            ws.cell(row=row, column=8, value=soll).border = border
+            ws.cell(row=row, column=9, value=actual - soll).border = border
             row += 1
 
         row += 1
@@ -357,7 +365,14 @@ class ExcelExporter:
         gaps = count_gaps(entries)
         last_row += 1
         ws.cell(row=last_row, column=1, value="Deputat:").font = Font(bold=True)
-        ws.cell(row=last_row, column=2, value=f"Min: {teacher.deputat_min}h | Max: {teacher.deputat_max}h")
+        soll = format_hours(teacher.target_hours(
+            self.data.config.teachers.deputat_max_buffer
+        ))
+        ws.cell(
+            row=last_row, column=2,
+            value=(f"Soll: {soll}h | Min: {teacher.deputat_min}h | "
+                   f"Max: {teacher.deputat_max}h"),
+        )
         ws.cell(row=last_row, column=3, value="Ist:").font = Font(bold=True)
         ws.cell(row=last_row, column=4, value=f"{actual}h")
         ws.cell(row=last_row, column=5, value="Springstunden:").font = Font(bold=True)

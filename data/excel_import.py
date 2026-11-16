@@ -11,7 +11,7 @@ from typing import Optional
 
 from config.schema import RoomConfig, SchoolConfig, SpecialRoomDef
 from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1
-from models.teacher import Teacher
+from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
 from models.school_class import SchoolClass
 from models.subject import (
     DEFAULT_CATEGORY, SUBJECT_CATEGORIES, Subject, default_subjects,
@@ -807,13 +807,10 @@ class ExcelImporter:
                     if s:
                         subjects.append(s)
 
-            # Deputat
-            dep_raw = row.get("deputat", "").strip()
-            try:
-                deputat = int(float(dep_raw)) if dep_raw else tc.vollzeit_deputat
-            except ValueError:
-                self._warnings.append(f"Zeile {i}: Ungültiges Deputat '{dep_raw}' → {tc.vollzeit_deputat}h")
-                deputat = tc.vollzeit_deputat
+            # Deputat (Soll-Stunden, halbe Stunden erlaubt: "25,5")
+            deputat = self._parse_deputat(
+                row.get("deputat", ""), f"Zeile {i}, Kürzel {abbr}"
+            )
 
             # Teilzeit
             tz_raw = row.get("teilzeit", "nein").strip().lower()
@@ -843,14 +840,14 @@ class ExcelImporter:
             except ValueError:
                 max_g = tc.max_gaps_per_day
 
-            deputat_max = deputat + tc.deputat_max_buffer
-            deputat_min = max(1, round(deputat_max * tc.deputat_min_fraction))
+            deputat_min, deputat_max = tc.deputat_bounds(deputat)
             teachers.append(Teacher(
                 id=abbr,
                 name=name,
                 subjects=subjects,
                 deputat_max=deputat_max,
                 deputat_min=deputat_min,
+                deputat_soll=deputat,
                 is_teilzeit=is_teilzeit,
                 unavailable_slots=unavailable,
                 preferred_free_days=free_days,
@@ -863,6 +860,28 @@ class ExcelImporter:
                 "Keine Lehrkräfte gefunden. Bitte Tabellenblatt 'Lehrkräfte' prüfen."
             )
         return teachers
+
+    def _parse_deputat(self, raw: str, location: str) -> float:
+        """Soll-Stunden aus der Spalte 'Deputat' (Komma oder Punkt).
+
+        Leer = Vollzeit-Deputat der Konfiguration. Erlaubt sind ganze
+        und halbe Stunden; alles andere ist ein Fehler.
+        """
+        default = float(self.config.teachers.vollzeit_deputat)
+        text = raw.strip().replace(",", ".")
+        if not text:
+            return default
+        try:
+            hours = float(text)
+        except ValueError:
+            hours = -1.0
+        if hours <= 0 or not (hours * HALF_LESSONS_PER_LESSON).is_integer():
+            self._errors.append(
+                f"{location}: Deputat '{raw}' ist ungültig. Erlaubt sind "
+                f"ganze oder halbe Stunden, z.B. 26 oder 25,5."
+            )
+            return default
+        return hours
 
     # ── Fachräume ──────────────────────────────────────────────────────────
 

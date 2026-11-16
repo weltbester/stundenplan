@@ -21,7 +21,7 @@ from ortools.sat.python import cp_model
 
 from config.schema import SchoolConfig
 from models.school_data import SchoolData
-from models.teacher import Teacher
+from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
 from models.school_class import SchoolClass
 from models.coupling import Coupling
 from solver.pinning import PinnedLesson
@@ -222,8 +222,8 @@ class ScheduleSolver:
 
         num_workers = self.config.solver.num_workers or os.cpu_count() or 4
 
-        # Deputat-Auslastung: immer als Core-Objective (auch bei --no-soft)
-        # dep_min = Sicherheitsboden; Solver optimiert immer in Richtung dep_max.
+        # Nähe zum Soll-Deputat: immer Teil des Ziels (auch bei --no-soft).
+        # deputat_min/deputat_max bleiben harte Grenzen (C7).
         dep_weight = self.data.config.solver.weight_deputat_deviation
         core_dep_terms = self._soft_deputat_deviation_penalties(dep_weight) if dep_weight > 0 else []
 
@@ -643,28 +643,30 @@ class ScheduleSolver:
                                 # Stattdessen: separate Verknüpfung via auxiliary in _c4.
                                 pass
 
+    def _teacher_load(self, teacher: Teacher):
+        """Wochenstunden einer Lehrkraft als Ausdruck; None ohne Variablen."""
+        slot_vars = [
+            var for key, var in self._slot.items()
+            if key[0] == teacher.id
+        ]
+        coupling_terms = []
+        for coupling in self.data.couplings:
+            for g_idx, group in enumerate(coupling.groups):
+                ca_key = (coupling.id, g_idx, teacher.id)
+                hours = group.hours_per_week
+                if ca_key in self._coupling_assign and hours > 0:
+                    coupling_terms.append(
+                        self._coupling_assign[ca_key] * hours
+                    )
+        if not (slot_vars or coupling_terms):
+            return None
+        return sum(slot_vars) + sum(coupling_terms)
+
     def _c7_deputat_bounds(self) -> None:
-        """Per-Lehrer asymmetrische Deputat-Schranken (deputat_min ≤ actual ≤ deputat_max)."""
+        """Deputat-Schranken je Lehrkraft (deputat_min ≤ Ist ≤ deputat_max)."""
         for teacher in self.data.teachers:
-            # Alle Slot-Variablen dieses Lehrers
-            slot_vars = [
-                var for key, var in self._slot.items()
-                if key[0] == teacher.id
-            ]
-
-            coupling_terms = []
-            for coupling in self.data.couplings:
-                for g_idx, group in enumerate(coupling.groups):
-                    ca_key = (coupling.id, g_idx, teacher.id)
-                    if ca_key in self._coupling_assign:
-                        h = group.hours_per_week
-                        if h > 0:
-                            coupling_terms.append(
-                                self._coupling_assign[ca_key] * h
-                            )
-
-            if slot_vars or coupling_terms:
-                total = sum(slot_vars) + sum(coupling_terms)
+            total = self._teacher_load(teacher)
+            if total is not None:
                 self._model.add(total >= teacher.deputat_min)
                 self._model.add(total <= teacher.deputat_max)
 
@@ -1454,23 +1456,82 @@ class ScheduleSolver:
         return terms
 
     def _soft_deputat_deviation_penalties(self, weight: int) -> list:
-        """Straft Unterauslastung: dev = deputat_max − actual (≥ 0 durch _c7 garantiert)."""
+        """Straft den Abstand jeder Lehrkraft von ihrem Soll.
+
+        Gerechnet wird in halben Stunden, damit ein Soll wie 25,5
+        ganzzahlig bleibt. Die Strafe wächst quadratisch: Fehlstunden
+        werden so gleichmäßig verteilt, statt einzelne Lehrkräfte an die
+        Untergrenze zu drücken. (Die Summe der einfachen Abstände wäre
+        für jeden Plan gleich und hätte keine Wirkung.)
+
+        Lehrkräfte, deren Stunden durch die Unterrichtsverteilung schon
+        feststehen, bekommen keinen Term: ihr Abstand ist nicht
+        beeinflussbar, und ein konstanter Zielanteil bremst die Suche.
+        """
+        max_buffer = self.config.teachers.deputat_max_buffer
+        open_lessons = self._open_lessons_by_teacher()
         terms = []
         for teacher in self.data.teachers:
-            slot_vars = [v for k, v in self._slot.items() if k[0] == teacher.id]
-            coupling_terms = []
-            for coupling in self.data.couplings:
-                for g_idx, group in enumerate(coupling.groups):
-                    ca_key = (coupling.id, g_idx, teacher.id)
-                    if ca_key in self._coupling_assign:
-                        h = group.hours_per_week
-                        if h > 0:
-                            coupling_terms.append(self._coupling_assign[ca_key] * h)
-            if not (slot_vars or coupling_terms):
+            fixed_hours, choices = open_lessons.get(teacher.id, (0, []))
+            if not choices:
                 continue
-            dev = self._model.new_int_var(0, teacher.deputat_max, f"dep_dev_{teacher.id}")
-            self._model.add(
-                dev == teacher.deputat_max - (sum(slot_vars) + sum(coupling_terms))
+            target = teacher.target_half_lessons(max_buffer)
+            lowest = HALF_LESSONS_PER_LESSON * fixed_hours - target
+            highest = lowest + HALF_LESSONS_PER_LESSON * sum(
+                hours for _, hours in choices
             )
-            terms.append(dev * weight)
+            diff = self._model.new_int_var(
+                lowest, highest, f"dep_diff_{teacher.id}"
+            )
+            load = fixed_hours + sum(var * hours for var, hours in choices)
+            self._model.add(diff == HALF_LESSONS_PER_LESSON * load - target)
+            squared = self._model.new_int_var(
+                0, max(lowest * lowest, highest * highest),
+                f"dep_sq_{teacher.id}",
+            )
+            self._model.add_multiplication_equality(squared, [diff, diff])
+            terms.append(squared * weight)
         return terms
+
+    def _open_lessons_by_teacher(self) -> dict[str, tuple[int, list]]:
+        """Je Lehrkraft: (feststehende Stunden, [(Variable, Stunden)]).
+
+        Feststehend ist eine Zuweisung, wenn die Lehrkraft die einzige
+        Kandidatin für das Klasse-Fach-Paar bzw. die Kopplungsgruppe ist
+        (z.B. durch die vorgegebene Unterrichtsverteilung). Die übrigen
+        Zuweisungen sind noch offen und stehen mit ihrer Variable in der
+        Liste.
+        """
+        class_hours = {
+            (cls.id, subject): hours
+            for cls in self.data.classes
+            for subject, hours in cls.curriculum.items()
+        }
+        group_hours = {
+            (coupling.id, index): group.hours_per_week
+            for coupling in self.data.couplings
+            for index, group in enumerate(coupling.groups)
+        }
+        lessons = [
+            (teacher_id, (class_id, subject),
+             class_hours.get((class_id, subject), 0), var)
+            for (teacher_id, class_id, subject), var in self._assign.items()
+        ] + [
+            (teacher_id, (coupling_id, index),
+             group_hours.get((coupling_id, index), 0), var)
+            for (coupling_id, index, teacher_id), var
+            in self._coupling_assign.items()
+        ]
+        candidates: dict[tuple, int] = {}
+        for _, unit, _, _ in lessons:
+            candidates[unit] = candidates.get(unit, 0) + 1
+
+        result: dict[str, tuple[int, list]] = {}
+        for teacher_id, unit, hours, var in lessons:
+            fixed_hours, choices = result.get(teacher_id, (0, []))
+            if candidates[unit] == 1:
+                fixed_hours += hours
+            elif hours > 0:
+                choices.append((var, hours))
+            result[teacher_id] = (fixed_hours, choices)
+        return result

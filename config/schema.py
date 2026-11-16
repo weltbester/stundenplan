@@ -1,3 +1,5 @@
+import math
+
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from enum import Enum
@@ -176,6 +178,28 @@ class TeacherConfig(BaseModel):
         6, ge=0, le=6,
         description="Mehrarbeit-Puffer über Deputat für Solver-Flexibilität (0–6h)"
     )
+    # Erlaubte Unterschreitung des Solls in Stunden. None = die Untergrenze
+    # folgt wie bisher aus deputat_min_fraction.
+    deputat_min_buffer: Optional[int] = Field(
+        None, ge=0, le=10,
+        description="Erlaubte Stunden unter dem Soll (leer = Anteil nutzen)"
+    )
+
+    def deputat_bounds(self, soll: float) -> tuple[int, int]:
+        """Ganzzahlige Grenzen (Untergrenze, Obergrenze) zu einem Soll.
+
+        Obergrenze: Soll aufgerundet plus `deputat_max_buffer`.
+        Untergrenze: Soll abgerundet minus `deputat_min_buffer`, sonst
+        `deputat_min_fraction` der Obergrenze – aber nie über dem Soll.
+        Mindestens 1 Stunde.
+        """
+        upper = math.ceil(soll) + self.deputat_max_buffer
+        if self.deputat_min_buffer is None:
+            lower = round(upper * self.deputat_min_fraction)
+        else:
+            lower = math.floor(soll) - self.deputat_min_buffer
+        lower = min(lower, math.floor(soll))
+        return max(1, lower), upper
 
 
 # ─── FACHRÄUME ───
@@ -276,10 +300,11 @@ class SolverConfig(BaseModel):
     # Das Feld bleibt, damit bestehende YAML-Dateien und Szenarien laden.
     weight_subject_spread: int = Field(60, ge=0,
         description="Veraltet (ohne Wirkung, ersetzt durch C15)")
-    # Gewicht für Deputat-Auslastung (immer aktiv, auch bei --no-soft)
-    # Minimiert sum(dep_max - actual): Solver strebt dep_max an; dep_min ist nur Sicherheitsboden.
+    # Gewicht für die Nähe zum Soll-Deputat (immer aktiv, auch bei --no-soft).
+    # Strafe je Lehrkraft: Gewicht × (Abstand vom Soll in halben Stunden)².
+    # Mit 50 kostet eine Stunde Abstand so viel wie eine Springstunde (200).
     weight_deputat_deviation: int = Field(50, ge=0,
-        description="Gewicht: Deputat-Auslastung maximieren (immer aktiv)")
+        description="Gewicht: Abstand vom Soll-Deputat (immer aktiv)")
     # Harte Obergrenze Springstunden pro Lehrer/Woche.
     # 0 = kein hartes Limit (empfohlen): kein deutsches Bundesland schreibt eine konkrete
     # Zahl vor. Stark gekoppelte Lehrer (Religion, WPF) haben strukturell 10-15 Lücken/Woche,

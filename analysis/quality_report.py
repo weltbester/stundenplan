@@ -5,10 +5,12 @@ zusammenfassende Metriken.
 """
 
 from collections import defaultdict
+from typing import Optional
 
 from pydantic import BaseModel
 
 from models.school_data import SchoolData
+from models.teacher import format_hours, format_hours_delta
 from solver.scheduler import ScheduleSolution
 from export.helpers import (
     count_gaps, count_teacher_actual_hours, detect_double_starts,
@@ -25,6 +27,15 @@ class TeacherQualityMetrics(BaseModel):
     actual_hours: int
     dep_min: int
     dep_max: int
+    # Soll-Stunden (halbe Stunden möglich); None bei alten Berichten
+    dep_soll: Optional[float] = None
+
+    @property
+    def soll_deviation(self) -> Optional[float]:
+        """Ist minus Soll in Stunden; None ohne Soll."""
+        if self.dep_soll is None:
+            return None
+        return self.actual_hours - self.dep_soll
     gaps_total: int
     gaps_per_day: dict[str, int]
     hours_per_day: dict[str, int]
@@ -139,9 +150,11 @@ class QualityAnalyzer:
         t_table = Table(title="Lehrer-Auslastung", box=box.ROUNDED, show_lines=False)
         t_table.add_column("ID", width=8)
         t_table.add_column("Name", width=25)
+        t_table.add_column("Soll", justify="right", width=5)
         t_table.add_column("Min", justify="right", width=5)
         t_table.add_column("Max", justify="right", width=5)
         t_table.add_column("Ist", justify="right", width=5)
+        t_table.add_column("Δ Soll", justify="right", width=6)
         t_table.add_column("Gaps", justify="right", width=6)
         t_table.add_column("Freie Tage", justify="right", width=10)
         t_table.add_column("Status", width=10)
@@ -153,10 +166,13 @@ class QualityAnalyzer:
                 status = "[yellow]Über Max[/yellow]"
             else:
                 status = "[green]OK[/green]"
+            deviation = m.soll_deviation
             t_table.add_row(
                 m.teacher_id, m.name,
+                "–" if m.dep_soll is None else format_hours(m.dep_soll),
                 str(m.dep_min), str(m.dep_max),
                 str(m.actual_hours),
+                "–" if deviation is None else format_hours_delta(deviation),
                 str(m.gaps_total),
                 str(m.free_days),
                 status,
@@ -231,6 +247,9 @@ class QualityAnalyzer:
                 actual_hours=actual,
                 dep_min=teacher.deputat_min,
                 dep_max=teacher.deputat_max,
+                dep_soll=teacher.target_hours(
+                    school_data.config.teachers.deputat_max_buffer
+                ),
                 gaps_total=gaps_total,
                 gaps_per_day=gaps_per_day,
                 hours_per_day=hours_per_day,

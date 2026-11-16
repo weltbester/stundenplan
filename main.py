@@ -803,11 +803,17 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
     console.print(f"[green]✓[/green] Lösung gespeichert: {out_path}")
 
     # ── Zusammenfassung: Lehrer-Auslastung ───────────────────────────────────
-    table = Table(title="Lehrer-Auslastung (Top 10)", box=box.ROUNDED)
+    from models.teacher import format_hours, format_hours_delta
+
+    table = Table(
+        title="Lehrer-Auslastung (10 größte Abweichungen vom Soll)",
+        box=box.ROUNDED,
+    )
     table.add_column("Kürzel")
+    table.add_column("Soll", justify="right")
     table.add_column("Min-Max", justify="right")
     table.add_column("Ist", justify="right")
-    table.add_column("Δ", justify="right")
+    table.add_column("Δ Soll", justify="right")
 
     teacher_hours: dict[str, int] = {}
     for entry in solution.entries:
@@ -830,22 +836,29 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
         teacher_hours[t_id] = teacher_hours.get(t_id, 0) + h
 
     teacher_map = {t.id: t for t in data.teachers}
+    max_buffer = data.config.teachers.deputat_max_buffer
     rows = []
     for t_id, actual in teacher_hours.items():
         teacher = teacher_map.get(t_id)
         if teacher:
-            delta = actual - teacher.deputat_max
-            rows.append((t_id, f"{teacher.deputat_min}-{teacher.deputat_max}", actual, delta, teacher))
+            soll = teacher.target_hours(max_buffer)
+            rows.append((t_id, soll, actual, actual - soll, teacher))
 
     rows.sort(key=lambda r: abs(r[3]), reverse=True)
-    for t_id, minmax, ist, delta, teacher in rows[:10]:
+    for t_id, soll, ist, delta, teacher in rows[:10]:
         if teacher.deputat_min <= ist <= teacher.deputat_max:
             color = "green"
         elif ist < teacher.deputat_min:
             color = "red"
         else:
             color = "yellow"
-        table.add_row(t_id, minmax, f"[{color}]{ist}[/{color}]", f"[{color}]{delta:+d}[/{color}]")
+        table.add_row(
+            t_id,
+            format_hours(soll),
+            f"{teacher.deputat_min}-{teacher.deputat_max}",
+            f"[{color}]{ist}[/{color}]",
+            f"[{color}]{format_hours_delta(delta)}[/{color}]",
+        )
 
     if rows:
         console.print(table)
@@ -1336,6 +1349,14 @@ _CATEGORY_STYLE: dict[str, str] = {
 }
 
 
+def _teacher_target_text(teacher, school_data) -> str:
+    """Soll-Stunden einer Lehrkraft als Text (z.B. '25,5')."""
+    from models.teacher import format_hours
+
+    max_buffer = school_data.config.teachers.deputat_max_buffer
+    return format_hours(teacher.target_hours(max_buffer))
+
+
 def _subject_style(subject_name: str, subjects) -> str:
     """Gibt einen rich-Stil für ein Fach zurück."""
     for s in subjects:
@@ -1558,7 +1579,8 @@ def _show_teacher_schedule(
         title=(
             f"Stundenplan [bold]{teacher_id}[/bold] — "
             f"{teacher.name} | "
-            f"Deputat: {teacher.deputat_min}–{teacher.deputat_max}h | "
+            f"Soll: {_teacher_target_text(teacher, school_data)}h "
+            f"(Grenzen {teacher.deputat_min}–{teacher.deputat_max}h) | "
             f"Ist: {ist_hours}h | Springstd: {gaps_total}"
         ),
         box=box.ROUNDED,

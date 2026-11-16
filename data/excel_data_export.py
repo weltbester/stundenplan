@@ -119,6 +119,11 @@ def couplings_with_solution_teachers(
     return result
 
 
+def _hours_cell(hours: float) -> float | int:
+    """Ganze Stunden als Ganzzahl, halbe als Kommazahl (Excel-Zelle)."""
+    return int(hours) if float(hours).is_integer() else hours
+
+
 def _teacher_row(teacher: Teacher, deputat_buffer: int) -> list:
     """Zeile im Blatt 'Lehrkräfte' (Reihenfolge wie die Kopfzeile)."""
     subjects = (teacher.subjects + [""] * MAX_SUBJECT_COLUMNS)
@@ -130,8 +135,8 @@ def _teacher_row(teacher: Teacher, deputat_buffer: int) -> list:
         teacher.name,
         teacher.id,
         *subjects[:MAX_SUBJECT_COLUMNS],
-        # Der Import addiert den Puffer wieder auf das Deputat.
-        teacher.deputat_max - deputat_buffer,
+        # Soll-Stunden; der Import leitet daraus die Grenzen ab.
+        _hours_cell(teacher.target_hours(deputat_buffer)),
         YES if teacher.is_teilzeit else NO,
         blocked,
         free_days,

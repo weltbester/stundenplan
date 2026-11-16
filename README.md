@@ -226,9 +226,28 @@ teachers:
   total_count: 105
   vollzeit_deputat: 26       # Vollzeit-Wochenstunden
   teilzeit_percentage: 0.30  # 30% Teilzeitlehrkräfte
-  deputat_min_fraction: 0.50 # Mindest-Deputat = 50% des Soll-Deputats
-  deputat_max_buffer: 6      # Max-Deputat = Soll + 6h
+  deputat_min_fraction: 0.50 # Untergrenze = 50% der Obergrenze
+  deputat_max_buffer: 6      # Obergrenze = Soll (aufgerundet) + 6h
+  deputat_min_buffer: 2      # optional: Untergrenze = Soll (abgerundet) - 2h
 ```
+
+Jede Lehrkraft hat ein **Soll-Deputat** (Spalte *Deputat* im Blatt
+*Lehrkräfte*), auch mit halben Stunden wie `25,5`. Der Solver plant nur
+ganze Stunden; aus dem Soll entstehen deshalb ganzzahlige harte Grenzen:
+
+- Obergrenze = Soll aufgerundet + `deputat_max_buffer`
+- Untergrenze = Soll abgerundet − `deputat_min_buffer`; ohne diese
+  Angabe `deputat_min_fraction` der Obergrenze, aber nie über dem Soll
+
+Beispiel mit beiden Puffern auf 2: Soll 25,5 → 23 bis 28 Stunden. Die
+Voreinstellung (Puffer 6, Anteil 0.50) ergibt für 26 Stunden den sehr
+weiten Bereich 16 bis 32.
+
+Zusammenfassung nach `solve`, `show <Kürzel>`, Qualitätsbericht und
+Exporte zeigen Soll, Ist und die Abweichung. Der Machbarkeits-Check
+warnt, wenn die Summe der Soll-Deputate mehr als 5 % vom
+Unterrichtsbedarf abweicht: dann kann nicht jede Lehrkraft ihr Soll
+erreichen, egal wie der Plan aussieht.
 
 ### Solver-Gewichte
 
@@ -240,7 +259,7 @@ solver:
   weight_double_lessons: 40
   weight_compact: 30
   weight_day_wishes: 20
-  weight_deputat_deviation: 50  # Deputat-Optimierung (immer aktiv)
+  weight_deputat_deviation: 50  # Nähe zum Soll-Deputat (immer aktiv)
 ```
 
 ---
@@ -262,7 +281,7 @@ Die Vorlage enthält folgende Tabellenblätter:
 | Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden |
 | Fächer | Fächerliste der Schule: Kürzel, Kategorie, Hauptfach, Fachraum-Typ, Doppelstunde |
 | Stundentafel | Jahrgang × Fach = Wochenstunden (wird importiert; leere Zelle = Fach entfällt) |
-| Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten |
+| Lehrkräfte | Name, Kürzel, Fächer, Deputat (Soll, auch `25,5`), Sperrzeiten |
 | Fachräume | Raumtyp, Name, Anzahl (gilt beim Import auch für den Solver) |
 | Kopplungen | Typ, Klassen, Gruppen, Stunden (aus der Konfiguration vorausgefüllt) |
 | Unterrichtsverteilung | Klasse × Fach: Kürzel der Lehrkraft |
@@ -388,7 +407,7 @@ stundenplan/
 | S3 | Wunsch-freie Tage honorieren | Weich |
 | S4 | Kompakte Lehrerpläne | Weich |
 | S5 | Optionale Doppelstunden fördern | Weich |
-| S6 | Deputat-Optimierung Richtung Maximum | Weich |
+| S6 | Nähe zum Soll-Deputat je Lehrkraft (quadratisch) | Weich |
 
 **C15 im Detail:** Zwei Stunden desselben Fachs am selben Tag sind nur
 als konfigurierter Doppelstunden-Block (z.B. 1–2, 3–4, 5–6) erlaubt, drei

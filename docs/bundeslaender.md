@@ -118,7 +118,7 @@ davon ab. Alles Landesspezifische muss über die Eingabedaten kommen.
 | G8 und G9 in verschiedenen Jahrgängen einer Schule | Ja | Jeder Jahrgang hat eine eigene Zeile. |
 | G8- und G9-Klassen im selben Jahrgang | Nein | Der Import kennt eine Tafel je Jahrgang (das Datenmodell je Klasse könnte es). |
 | Schulen mit Kl. 7–10 oder 5–9 | Ungetestet | Konfigurierbar; die eingebaute Tafel deckt nur 5–10 ab. |
-| Fächer aller Länder | Nein | Feste Liste von 18 Fächern in `SUBJECT_METADATA`. |
+| Fächer aller Länder | Ja | Freie Fächerliste im Excel-Blatt "Fächer" (Kürzel, Fachraum, Doppelstunde je Fach). |
 | Wochen über 35 Stunden | Nein | Eine 8. Stunde ist konfigurierbar, aber keine Regel für Mittagspause, Nachmittage je Klasse oder Minuten pro Tag. |
 | Religion/Ethik, Wahlpflicht | Ja | Kopplungen. |
 | Sprachen-Schienen, Zweige, geteilte Gruppen | Ungetestet | Vermutlich als Kopplung abbildbar. |

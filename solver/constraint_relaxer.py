@@ -129,23 +129,20 @@ class ConstraintRelaxer:
     # ─── Einzel-Relaxierungen ─────────────────────────────────────────────────
 
     def _relax_no_double_required(self) -> SchoolData:
-        """Erstellt Datensatz ohne double_required-Constraints (nur Config-Ebene).
-
-        Da double_required im SUBJECT_METADATA steckt (nicht im SchoolData),
-        wird stattdessen ein überschriebener Solver verwendet. Wir modifizieren
-        die config so, dass double_required ignoriert wird.
-
-        Trick: Wir geben die identischen Daten zurück, aber mit einem Marker
-        im config-Snapshot. Der Solver wird mit einem modifizierten Context aufgerufen.
-        Da wir ScheduleSolver nicht direkt patchbar ist ohne Subclassing, erstellen
-        wir eine Hilfsdaten-Kopie und setzen alle Klassen-Curricula auf 0 für
-        double_required-Fächer → nein, das wäre zu destruktiv.
-
-        Stattdessen: Wir überschreiben SUBJECT_METADATA temporär.
-        Da das ein globales Dict ist, clonen wir den Solver-Lauf in einem
-        Subprocess-ähnlichen Kontext. Für Einfachheit: wir patchen lokal.
-        """
-        return self.data  # Wird speziell behandelt in _run_no_double_required
+        """Erstellt Datensatz, in dem kein Fach Doppelstunden erzwingt."""
+        relaxed_subjects = [
+            subject.model_copy(update={"double_lesson_required": False})
+            for subject in self.data.subjects
+        ]
+        return SchoolData(
+            subjects=relaxed_subjects,
+            rooms=self.data.rooms,
+            classes=self.data.classes,
+            teachers=self.data.teachers,
+            couplings=self.data.couplings,
+            config=self.data.config,
+            fixed_assignments=self.data.fixed_assignments,
+        )
 
     def _relax_no_room_limits(self) -> SchoolData:
         """Erstellt Datensatz mit unbegrenzten Fachraum-Kapazitäten."""
@@ -266,10 +263,7 @@ class ConstraintRelaxer:
         time_limit: int,
     ) -> RelaxResult:
         """Testet eine einzelne Relaxierung."""
-        if name == "no_double_required":
-            status, elapsed = self._run_no_double_required(pins, time_limit)
-        else:
-            status, elapsed = self._run_solver_timed(data, pins, time_limit)
+        status, elapsed = self._run_solver_timed(data, pins, time_limit)
 
         logger.info(f"  Relaxierung '{name}': {status} ({elapsed:.1f}s)")
         return RelaxResult(
@@ -324,54 +318,6 @@ class ConstraintRelaxer:
             elapsed = time.time() - t0
             logger.warning(f"Solver-Ausnahme: {e}")
             return "UNKNOWN", elapsed
-
-    def _run_no_double_required(
-        self,
-        pins: list[PinnedLesson],
-        time_limit: int,
-    ) -> tuple[str, float]:
-        """Führt den Solver ohne double_required-Constraints aus.
-
-        Patcht SUBJECT_METADATA temporär, um alle double_required=False zu setzen.
-        Thread-safe ist dies nicht; für Diagnose-Zwecke (single-threaded) ausreichend.
-        """
-        from config.defaults import SUBJECT_METADATA
-        from solver.scheduler import ScheduleSolver
-
-        # Temporär patchen
-        originals = {}
-        for name, meta in SUBJECT_METADATA.items():
-            if meta.get("double_required"):
-                originals[name] = meta["double_required"]
-                meta["double_required"] = False
-
-        try:
-            t0 = time.time()
-            new_config = self.data.config.model_copy(deep=True)
-            if new_config.solver.time_limit_seconds > time_limit:
-                new_config.solver.time_limit_seconds = time_limit
-                new_config.solver.num_workers = 2
-            modified_data = SchoolData(
-                subjects=self.data.subjects,
-                rooms=self.data.rooms,
-                classes=self.data.classes,
-                teachers=self.data.teachers,
-                couplings=self.data.couplings,
-                config=new_config,
-                fixed_assignments=self.data.fixed_assignments,
-            )
-            solver = ScheduleSolver(modified_data)
-            solution = solver.solve(pins=pins, use_soft=False)
-            elapsed = time.time() - t0
-            return solution.solver_status, elapsed
-        except Exception as e:
-            elapsed = time.time() - t0
-            logger.warning(f"Solver-Ausnahme (no_double_required): {e}")
-            return "UNKNOWN", elapsed
-        finally:
-            # Patch zurücksetzen
-            for name, orig_val in originals.items():
-                SUBJECT_METADATA[name]["double_required"] = orig_val
 
     # ─── Empfehlung ───────────────────────────────────────────────────────────
 

@@ -20,7 +20,6 @@ from pydantic import BaseModel
 from ortools.sat.python import cp_model
 
 from config.schema import SchoolConfig
-from config.defaults import SUBJECT_METADATA
 from models.school_data import SchoolData
 from models.teacher import Teacher
 from models.school_class import SchoolClass
@@ -170,10 +169,18 @@ class ScheduleSolver:
         self._sidx_teacher_day_slot: dict = {}  # (teacher_id, day, slot_nr) → [BoolVar]
         self._sidx_tcsd: dict = {}              # (teacher_id, class_id, subj, day) → [BoolVar]
 
-        # Subject-Metadaten-Cache
-        self._subject_meta: dict = {}
-        for name, meta in SUBJECT_METADATA.items():
-            self._subject_meta[name] = meta
+        # Fächer des Datensatzes (maßgeblich für Fachraum und Doppelstunden)
+        self._double_required: set[str] = {
+            s.name for s in school_data.subjects if s.double_lesson_required
+        }
+        self._double_preferred: set[str] = {
+            s.name for s in school_data.subjects
+            if s.double_lesson_preferred
+        }
+        self._room_type_by_subject: dict[str, str] = {
+            s.name: s.requires_special_room
+            for s in school_data.subjects if s.requires_special_room
+        }
 
         # Kopplungs-bedeckte Fächer pro Klasse
         self._coupling_covered: dict[str, set[str]] = {}  # class_id -> set of subjects
@@ -455,10 +462,7 @@ class ScheduleSolver:
         Nur wenn BEIDE Slot-Variablen (bs und bs+1) existieren.
         """
         tg = self.config.time_grid
-        double_subjects = {
-            n for n, m in SUBJECT_METADATA.items()
-            if m.get("double_required") or m.get("double_preferred")
-        }
+        double_subjects = self._double_required | self._double_preferred
 
         # double_pairs: slot_first -> slot_second
         double_pairs: dict[int, int] = {}
@@ -673,10 +677,7 @@ class ScheduleSolver:
         tg = self.config.time_grid
 
         # Für jede Raum-Typ und jeden Slot: max room_count simultane Nutzungen
-        room_type_for_subject: dict[str, str] = {}
-        for name, meta in SUBJECT_METADATA.items():
-            if meta.get("room"):
-                room_type_for_subject[name] = meta["room"]
+        room_type_for_subject = self._room_type_by_subject
 
         # Vorberechnen: welche Kopplungen welche Raumtypen pro Gruppe brauchen
         coupling_room_types: dict[str, list[str]] = {}  # coupling_id → [rtype, ...]
@@ -731,10 +732,7 @@ class ScheduleSolver:
         """
         tg = self.config.time_grid
 
-        double_required_subjects = {
-            name for name, meta in SUBJECT_METADATA.items()
-            if meta.get("double_required")
-        }
+        double_required_subjects = self._double_required
 
         # Erste → zweite Slot-Nummer jedes Doppelstunden-Blocks
         double_pairs: dict[int, int] = {}
@@ -990,9 +988,7 @@ class ScheduleSolver:
                 ))
 
         # ScheduleEntries aus slot-Variablen
-        room_type_for_subject: dict[str, Optional[str]] = {
-            name: meta.get("room") for name, meta in SUBJECT_METADATA.items()
-        }
+        room_type_for_subject = self._room_type_by_subject
 
         for (t, c, s, day, h), var in self._slot.items():
             if cp_solver.value(var) == 1:
@@ -1184,10 +1180,7 @@ class ScheduleSolver:
                 )
 
         # Fachraum-Kapazität
-        room_type_for_subject: dict[str, str] = {}
-        for name, meta in SUBJECT_METADATA.items():
-            if meta.get("room"):
-                room_type_for_subject[name] = meta["room"]
+        room_type_for_subject = self._room_type_by_subject
 
         for subj, rtype in room_type_for_subject.items():
             need = subject_need.get(subj, 0)
@@ -1453,10 +1446,7 @@ class ScheduleSolver:
 
     def _soft_double_preferred_bonuses(self, weight: int) -> list:
         """Bonus für Doppelstunden bei double_preferred-Fächern (negativer Zielfunktionsterm)."""
-        double_preferred = {
-            n for n, m in SUBJECT_METADATA.items()
-            if m.get("double_preferred")
-        }
+        double_preferred = self._double_preferred
         terms = []
         for (t, c, s, day, bs), dvar in self._double.items():
             if s in double_preferred:

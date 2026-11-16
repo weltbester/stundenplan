@@ -31,6 +31,16 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 - Referenz `docs/bundeslaender.md`: Vorgaben der 16 Länder für die
   Sek I am Gymnasium (G8/G9, Schüler- und Lehrerstunden), Abgleich
   mit dem Programm und nötige Erweiterungen je Länderfamilie.
+- Freie Fächerliste: neues Excel-Blatt "Fächer" (Fach, Kürzel,
+  Kategorie, Hauptfach, Fachraum-Typ, Doppelstunde), vorausgefüllt mit
+  den bisherigen Fächern und Wirtschaft-Politik, Praktische
+  Philosophie, Spanisch, Niederländisch, Ergänzungsstunde. Solver,
+  Machbarkeits-Check und `template --from-data` richten sich nach der
+  Fächerliste des Datensatzes; Mappen ohne das Blatt und ältere
+  JSON-Dateien funktionieren weiter.
+- Machbarkeits-Check meldet Fächer, die in Stundentafel, bei
+  Lehrkräften oder in Kopplungen vorkommen, aber nicht in der
+  Fächerliste stehen.
 - Machbarkeits-Check prüft die Vorgaben (unbekannte Klasse/Kürzel,
   Fach nicht in der Stundentafel, Deputat-Max, Sperrzeiten,
   Deputat-Min erreichbar; fachfremder Einsatz als Warnung).
@@ -54,6 +64,14 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   (`solver/time_budget.py`).
 - Benchmark: "Spätgewinn %" bezieht sich auf die Optimierungszeit
   statt auf das ganze Zeitlimit.
+- Excel-Import: Ein unbekannter Fachname ist immer ein Fehler. Bisher
+  wurde ein ähnlich geschriebenes Fach mit einer Warnung eingesetzt
+  (z.B. "Mathe" → "Mathematik"); jetzt wird es nur vorgeschlagen.
+  Groß-/Kleinschreibung bleibt egal.
+- `template --from-data` schreibt die Stundentafel des Datensatzes
+  (bisher immer die eingebaute).
+- Die Auswahlliste für Fächer im Blatt "Lehrkräfte" verweist auf das
+  Blatt "Fächer" (bisher eine feste Liste der ersten 20 Fächer).
 - `.gitignore`: echte Personaldaten (`lehrer.txt`, `lehrer.xlsx`),
   die fremde venv `.macpro/` und `.DS_Store` werden ignoriert.
 
@@ -73,6 +91,13 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Sperrzeit gerechnet (bisher: Wochen-Slots minus Sperrzeiten). Zu
   hohe Vorgaben oder ein zu hohes Deputat-Min fallen damit vor dem
   Solver-Lauf auf statt als unerklärtes INFEASIBLE.
+- Excel-Import: Die Raumanzahl aus dem Blatt "Fachräume" gilt jetzt
+  auch für den Solver. Bisher rechnete er mit der Anzahl aus der
+  Konfiguration; ein nur im Blatt angelegter Raumtyp galt als
+  unbegrenzt.
+- `solve --diagnose` verändert für die Probe "ohne
+  Doppelstunden-Pflicht" keine globale Tabelle mehr, sondern eine Kopie
+  der Fächerliste.
 - `solve --diagnose` rechnet mit der vorgegebenen Unterrichtsverteilung
   (die Relaxierungen ließen sie bisher weg).
 - Validator meldete bei jedem Plan mit WPF-Kopplungen Fehlalarme

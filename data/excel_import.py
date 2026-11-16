@@ -9,11 +9,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from config.schema import SchoolConfig
-from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1, SUBJECT_METADATA
+from config.schema import RoomConfig, SchoolConfig, SpecialRoomDef
+from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1
 from models.teacher import Teacher
 from models.school_class import SchoolClass
-from models.subject import Subject
+from models.subject import (
+    DEFAULT_CATEGORY, SUBJECT_CATEGORIES, Subject, default_subjects,
+)
 from models.room import Room
 from models.coupling import Coupling, CouplingGroup
 from models.fixed_assignment import (
@@ -57,6 +59,32 @@ CURRICULUM_SHEET = "Stundentafel"
 _GRADE_NUMBER_RE = re.compile(r"\d+")
 # Jahrgang → Fach → Wochenstunden
 CurriculumTable = dict[int, dict[str, int]]
+
+# ─── Blatt "Fächer" ───────────────────────────────────────────────────────────
+
+SUBJECT_SHEET = "Fächer"
+SUBJECT_HEADERS = (
+    "Fach", "Kürzel", "Kategorie", "Hauptfach", "Fachraum-Typ",
+    "Doppelstunde",
+)
+DOUBLE_NONE = "nein"
+DOUBLE_PREFERRED = "bevorzugt"
+DOUBLE_REQUIRED = "Pflicht"
+DOUBLE_CHOICES = (DOUBLE_NONE, DOUBLE_PREFERRED, DOUBLE_REQUIRED)
+SUBJECT_HINTS = (
+    f"{HINT_PREFIX}: Neues Fach = neue Zeile hier und eine Zeile mit "
+    f"demselben Namen im Blatt '{CURRICULUM_SHEET}'.",
+    "Kategorie (bestimmt die Farbe): " + ", ".join(SUBJECT_CATEGORIES),
+    "Fachraum-Typ: Raumtyp aus dem Blatt 'Fachräume'; leer = Klassenraum.",
+    "Doppelstunde: " + ", ".join(DOUBLE_CHOICES),
+)
+_YES_VALUES = frozenset({"ja", "yes", "true", "1", "x"})
+_NO_ROOM_MARKS = frozenset({"", "–", "-", "—", "nein"})
+_SHORT_NAME_LENGTH = 2
+# Letzte Zeile, bis zu der Auswahllisten in der Vorlage gelten
+_LAST_INPUT_ROW = 200
+_SUBJECT_SHEET_WIDTHS = (24, 10, 14, 11, 14, 14)
+_SUBJECT_HINT_COLUMN = len(SUBJECT_HEADERS) + 2
 _HEADER_COLOR = "2E6DA4"
 _LOCKED_COLOR = "E0E0E0"
 _BORDER_COLOR = "BBBBBB"
@@ -109,9 +137,39 @@ def _parse_free_days(raw: str) -> list[int]:
 
 
 def _fuzzy_subject(name: str, known: list[str]) -> Optional[str]:
-    """Fuzzy-Matching: Findet das ähnlichste bekannte Fach."""
+    """Ähnlichstes bekanntes Fach (nur Vorschlag für Fehlermeldungen)."""
     matches = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
     return matches[0] if matches else None
+
+
+def builtin_curriculum() -> CurriculumTable:
+    """Die eingebaute Stundentafel (nur Fächer mit Stunden)."""
+    return {
+        grade: {subject: hours for subject, hours in table.items()
+                if hours > 0}
+        for grade, table in STUNDENTAFEL_GYMNASIUM_SEK1.items()
+    }
+
+
+def double_lesson_label(subject: Subject) -> str:
+    """Wert der Spalte 'Doppelstunde' für ein Fach."""
+    if subject.double_lesson_required:
+        return DOUBLE_REQUIRED
+    if subject.double_lesson_preferred:
+        return DOUBLE_PREFERRED
+    return DOUBLE_NONE
+
+
+def subject_row(subject: Subject) -> list:
+    """Zeile im Blatt 'Fächer' (Reihenfolge wie SUBJECT_HEADERS)."""
+    return [
+        subject.name,
+        subject.short_name,
+        subject.category,
+        "ja" if subject.is_hauptfach else "nein",
+        subject.requires_special_room or "",
+        double_lesson_label(subject),
+    ]
 
 
 def _is_teacher_example(name: str, abbr: str, row: dict) -> bool:
@@ -143,13 +201,22 @@ def _cell_ref(column: int, row_number: int) -> str:
 
 # ─── TEMPLATE-GENERATOR ───────────────────────────────────────────────────────
 
-def generate_template(config: SchoolConfig, path: Path) -> None:
+def generate_template(
+    config: SchoolConfig,
+    path: Path,
+    subjects: Optional[list[Subject]] = None,
+    curriculum: Optional[CurriculumTable] = None,
+) -> None:
     """Erzeugt eine leere Excel-Vorlage mit vorausgefüllten Blättern.
+
+    Ohne `subjects`/`curriculum` gelten die vorgeschlagene Fächerliste
+    und die eingebaute Stundentafel.
 
     Blätter:
       - Zeitraster:    Slot-Nr, Start, Ende, SII-only (aus Config)
       - Jahrgänge:     Jahrgang, Klassen, Soll-Stunden (aus Config)
-      - Stundentafel:  Jahrgang × Fächer Matrix (aus STUNDENTAFEL)
+      - Fächer:        Fach, Kürzel, Kategorie, Fachraum, Doppelstunde
+      - Stundentafel:  Jahrgang × Fächer Matrix
       - Lehrkräfte:    Eingabe-Vorlage mit Beispielzeile
       - Fachräume:     Raumtyp, Name, Anzahl
       - Kopplungen:    Jahrgang, Typ, Klassen, Gruppen, Stunden
@@ -164,6 +231,11 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         from openpyxl.worksheet.datavalidation import DataValidation
     except ImportError:
         raise ImportError("openpyxl nicht installiert. Bitte: pip install openpyxl")
+
+    subject_list = subjects if subjects is not None else default_subjects()
+    curriculum_table = (
+        curriculum if curriculum is not None else builtin_curriculum()
+    )
 
     wb = openpyxl.Workbook()
 
@@ -236,10 +308,13 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         for col, val in enumerate(row_vals, 1):
             style_data(ws_jg.cell(row=r, column=col, value=val), alt=alt)
 
-    # ── Blatt 3: Stundentafel ─────────────────────────────────────────────────
+    # ── Blatt 3: Fächer ───────────────────────────────────────────────────────
+    _write_subject_sheet(wb, subject_list)
+
+    # ── Blatt 4: Stundentafel ─────────────────────────────────────────────────
     ws_st = wb.create_sheet("Stundentafel")
-    all_subjects = list(SUBJECT_METADATA.keys())
-    grade_nums = sorted(STUNDENTAFEL_GYMNASIUM_SEK1.keys())
+    all_subjects = [subject.name for subject in subject_list]
+    grade_nums = sorted(curriculum_table.keys())
 
     # Kopfzeile: Jahrgang-Spalten
     style_header(ws_st.cell(row=1, column=1, value="Fach"))
@@ -254,11 +329,11 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         alt = (r % 2 == 0)
         style_data(ws_st.cell(row=r, column=1, value=subj), alt=alt)
         for col, grade in enumerate(grade_nums, 2):
-            hours = STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).get(subj, 0)
+            hours = curriculum_table.get(grade, {}).get(subj, 0)
             cell = ws_st.cell(row=r, column=col, value=hours if hours else "")
             style_data(cell, alt=alt)
 
-    # ── Blatt 4: Lehrkräfte ───────────────────────────────────────────────────
+    # ── Blatt 5: Lehrkräfte ───────────────────────────────────────────────────
     ws_lk = wb.create_sheet("Lehrkräfte")
     lk_headers = [
         "Name (Nachname, Vorname)", "Kürzel", "Fach 1", "Fach 2", "Fach 3",
@@ -281,15 +356,11 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
         style_example(ws_lk.cell(row=2, column=col, value=val))
     ws_lk.cell(row=2, column=1).comment = None
 
-    # Dropdown-Validierung für Fächer (Spalten 3-5)
-    subject_list = ",".join(all_subjects)
-    # openpyxl DataValidation: Dropdown via formula (list muss kurz sein)
-    # Wegen Längenbeschränkung: nur Formel-basiert mit benanntem Bereich oder direkt
-    # Für Excel-Kompatibilität: Dropdown über explizite Liste (max 255 Zeichen)
-    # Kürzel der Fächer passen; Vollnamen ggf. zu lang → separate Hilfsliste
+    # Auswahlliste für Fächer (Spalten 3-5): verweist auf das Blatt
+    # "Fächer", damit auch dort ergänzte Fächer wählbar sind.
     dv_subject = DataValidation(
         type="list",
-        formula1='"' + ",".join(all_subjects[:20]) + '"',  # Ersten 20 Fächer
+        formula1=f"='{SUBJECT_SHEET}'!$A$2:$A${_LAST_INPUT_ROW}",
         allow_blank=True,
         showDropDown=False,
     )
@@ -305,7 +376,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     dv_teilzeit.sqref = "G3:G200"
     ws_lk.add_data_validation(dv_teilzeit)
 
-    # ── Blatt 5: Fachräume ────────────────────────────────────────────────────
+    # ── Blatt 6: Fachräume ────────────────────────────────────────────────────
     ws_fr = wb.create_sheet("Fachräume")
     fr_headers = ["Raumtyp (intern)", "Anzeigename", "Anzahl"]
     for col, h in enumerate(fr_headers, 1):
@@ -322,7 +393,7 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
     # Keine Beispielzeile: die Zeilen aus der Config dienen als Muster.
     # (Eine Beispielzeile würde beim Import als echter Raum eingelesen.)
 
-    # ── Blatt 6: Kopplungen ───────────────────────────────────────────────────
+    # ── Blatt 7: Kopplungen ───────────────────────────────────────────────────
     ws_kp = wb.create_sheet("Kopplungen")
     kp_headers = [
         "ID", "Typ (reli_ethik/wpf)", "Beteiligte Klassen (kommagetrennt)",
@@ -345,8 +416,8 @@ def generate_template(config: SchoolConfig, path: Path) -> None:
             style_data(ws_kp.cell(row=r, column=col, value=val),
                        alt=(r % 2 == 0))
 
-    # ── Blatt 7: Unterrichtsverteilung ────────────────────────────────────────
-    _write_assignment_sheet(wb, config)
+    # ── Blatt 8: Unterrichtsverteilung ────────────────────────────────────────
+    _write_assignment_sheet(wb, config, all_subjects, curriculum_table)
 
     # ── Speichern ─────────────────────────────────────────────────────────────
     path = Path(path)
@@ -395,11 +466,53 @@ def _config_coupled_subjects(config: SchoolConfig, grade: int) -> set[str]:
     return coupled
 
 
+def _write_subject_sheet(workbook, subjects: list[Subject]) -> None:
+    """Blatt 'Fächer': die Fächerliste der Schule, frei erweiterbar."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    side = Side(style="thin", color=_BORDER_COLOR)
+    border = Border(left=side, right=side, top=side, bottom=side)
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor=_HEADER_COLOR)
+
+    sheet = workbook.create_sheet(SUBJECT_SHEET)
+    for column, title in enumerate(SUBJECT_HEADERS, 1):
+        cell = sheet.cell(row=1, column=column, value=title)
+        cell.font, cell.fill, cell.border = header_font, header_fill, border
+        cell.alignment = Alignment(horizontal="center")
+        letter = get_column_letter(column)
+        sheet.column_dimensions[letter].width = (
+            _SUBJECT_SHEET_WIDTHS[column - 1]
+        )
+    for row, subject in enumerate(subjects, 2):
+        for column, value in enumerate(subject_row(subject), 1):
+            sheet.cell(row=row, column=column, value=value).border = border
+    for row, hint in enumerate(SUBJECT_HINTS, 1):
+        sheet.cell(row=row, column=_SUBJECT_HINT_COLUMN, value=hint).font = (
+            Font(italic=True)
+        )
+
+    choices_by_column = {
+        "C": SUBJECT_CATEGORIES, "D": ("ja", "nein"), "F": DOUBLE_CHOICES,
+    }
+    for letter, choices in choices_by_column.items():
+        validation = DataValidation(
+            type="list", formula1='"' + ",".join(choices) + '"',
+            allow_blank=True,
+        )
+        validation.sqref = f"{letter}2:{letter}{_LAST_INPUT_ROW}"
+        sheet.add_data_validation(validation)
+    sheet.freeze_panes = "A2"
+
+
 def _assignment_cell_mark(
-    config: SchoolConfig, grade: int, subject: str
+    config: SchoolConfig, grade: int, subject: str,
+    curriculum: CurriculumTable,
 ) -> Optional[str]:
     """Vorbelegung einer Matrix-Zelle; None = Zelle ist auszufüllen."""
-    hours = STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).get(subject, 0)
+    hours = curriculum.get(grade, {}).get(subject, 0)
     if hours <= 0:
         return NOT_TAUGHT_MARK
     if subject in _config_coupled_subjects(config, grade):
@@ -407,7 +520,12 @@ def _assignment_cell_mark(
     return None
 
 
-def _write_assignment_sheet(workbook, config: SchoolConfig) -> None:
+def _write_assignment_sheet(
+    workbook,
+    config: SchoolConfig,
+    subject_names: list[str],
+    curriculum: CurriculumTable,
+) -> None:
     """Matrix Klasse × Fach für die vorgegebene Unterrichtsverteilung."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
@@ -422,9 +540,8 @@ def _write_assignment_sheet(workbook, config: SchoolConfig) -> None:
     classes = _template_classes(config)
     grades = {grade for _, grade in classes}
     subjects = [
-        name for name in SUBJECT_METADATA
-        if any(STUNDENTAFEL_GYMNASIUM_SEK1.get(g, {}).get(name, 0) > 0
-               for g in grades)
+        name for name in subject_names
+        if any(curriculum.get(g, {}).get(name, 0) > 0 for g in grades)
     ]
 
     sheet = workbook.create_sheet(ASSIGNMENT_SHEET)
@@ -439,7 +556,9 @@ def _write_assignment_sheet(workbook, config: SchoolConfig) -> None:
         class_cell = sheet.cell(row=row, column=1, value=class_id)
         class_cell.font, class_cell.border = Font(bold=True), border
         for column, subject in enumerate(subjects, 2):
-            mark = _assignment_cell_mark(config, grade, subject)
+            mark = _assignment_cell_mark(
+                config, grade, subject, curriculum
+            )
             cell = sheet.cell(row=row, column=column, value=mark)
             cell.alignment, cell.border = center, border
             if mark is not None:
@@ -461,7 +580,8 @@ class ExcelImporter:
         self.path = Path(path)
         self.config = config
         self._wb = None
-        self._known_subjects = list(SUBJECT_METADATA.keys())
+        self._known_subjects: list[str] = []
+        self._set_known_subjects(default_subjects())
         self._errors: list[str] = []
         self._warnings: list[str] = []
 
@@ -504,25 +624,116 @@ class ExcelImporter:
             })
         return result
 
+    def _set_known_subjects(self, subjects: list[Subject]) -> None:
+        """Legt fest, welche Fachnamen der Import akzeptiert."""
+        self._known_subjects = [subject.name for subject in subjects]
+        self._subject_by_key = {
+            name.lower(): name for name in self._known_subjects
+        }
+
     def _parse_subject(self, raw: str, row_id: str) -> Optional[str]:
-        """Normalisiert und validiert einen Fachnamen. Fuzzy-matching bei Tippfehlern."""
+        """Prüft einen Fachnamen gegen die Fächerliste.
+
+        Groß-/Kleinschreibung ist egal. Ein unbekannter Name ist ein
+        Fehler; ein ähnliches Fach wird nur vorgeschlagen, nie
+        stillschweigend eingesetzt.
+        """
         name = raw.strip()
         if not name:
             return None
-        if name in self._known_subjects:
-            return name
-        match = _fuzzy_subject(name, self._known_subjects)
-        if match:
-            self._warnings.append(
-                f"{row_id}: Fach '{name}' unbekannt → meinten Sie '{match}'? "
-                f"Wird als '{match}' importiert."
-            )
-            return match
+        known = self._subject_by_key.get(name.lower())
+        if known:
+            return known
+        suggestion = _fuzzy_subject(name, self._known_subjects)
+        hint = f" Meinten Sie '{suggestion}'?" if suggestion else ""
         self._errors.append(
-            f"{row_id}: Unbekanntes Fach '{name}'. "
-            f"Ähnliche Fächer: {', '.join(difflib.get_close_matches(name, self._known_subjects, n=3, cutoff=0.4)) or 'keine'}"
+            f"{row_id}: Unbekanntes Fach '{name}'.{hint} Der Name muss "
+            f"wie im Blatt '{SUBJECT_SHEET}' geschrieben sein."
         )
         return None
+
+    # ── Fächer ──────────────────────────────────────────────────────────────
+
+    def import_subjects(self) -> list[Subject]:
+        """Liest das Blatt 'Fächer'; fehlt es, gilt die Vorschlagsliste."""
+        sheet = self._get_sheet(SUBJECT_SHEET)
+        if sheet is None:
+            return default_subjects()
+
+        subjects: list[Subject] = []
+        seen: set[str] = set()
+        for row_number, row in enumerate(self._sheet_rows(sheet), 2):
+            subject = self._subject_from_row(row, row_number, seen)
+            if subject is not None:
+                subjects.append(subject)
+        if not subjects:
+            self._errors.append(
+                f"{SUBJECT_SHEET}: Das Blatt enthält keine Fächer."
+            )
+        return subjects
+
+    def _subject_from_row(
+        self, row: dict, row_number: int, seen: set[str]
+    ) -> Optional[Subject]:
+        """Ein Fach aus einer Zeile; None bei Leerzeile oder Fehler."""
+        name = row.get("fach", "").strip()
+        if not name or name.startswith(HINT_PREFIX):
+            return None
+        location = f"{SUBJECT_SHEET} Zeile {row_number} ('{name}')"
+        if name.lower() in seen:
+            self._errors.append(f"{location}: Das Fach steht mehrfach "
+                                f"im Blatt.")
+            return None
+        seen.add(name.lower())
+
+        double = self._double_lesson_choice(
+            row.get("doppelstunde", ""), location
+        )
+        if double is None:
+            return None
+        room_type = row.get("fachraum-typ", "").strip().lower()
+        return Subject(
+            name=name,
+            short_name=(row.get("kürzel", "").strip()
+                        or name[:_SHORT_NAME_LENGTH]),
+            category=self._subject_category(
+                row.get("kategorie", ""), location
+            ),
+            is_hauptfach=row.get("hauptfach", "").lower() in _YES_VALUES,
+            requires_special_room=(
+                None if room_type in _NO_ROOM_MARKS else room_type
+            ),
+            double_lesson_required=double == DOUBLE_REQUIRED,
+            double_lesson_preferred=double == DOUBLE_PREFERRED,
+        )
+
+    def _double_lesson_choice(self, raw: str, location: str) -> Optional[str]:
+        """Wert der Spalte 'Doppelstunde'; None (mit Fehler) wenn ungültig."""
+        value = raw.strip().lower()
+        if not value:
+            return DOUBLE_NONE
+        for choice in DOUBLE_CHOICES:
+            if value == choice.lower():
+                return choice
+        self._errors.append(
+            f"{location}: Doppelstunde '{raw}' ist ungültig. Erlaubt: "
+            f"{', '.join(DOUBLE_CHOICES)}."
+        )
+        return None
+
+    def _subject_category(self, raw: str, location: str) -> str:
+        """Kategorie des Fachs; unbekannte Werte werden zu 'sonstig'."""
+        value = raw.strip().lower()
+        if not value:
+            return DEFAULT_CATEGORY
+        if value not in SUBJECT_CATEGORIES:
+            self._warnings.append(
+                f"{location}: Kategorie '{raw}' ist unbekannt und wird als "
+                f"'{DEFAULT_CATEGORY}' geführt. Erlaubt: "
+                f"{', '.join(SUBJECT_CATEGORIES)}."
+            )
+            return DEFAULT_CATEGORY
+        return value
 
     # ── Zeitraster ──────────────────────────────────────────────────────────
 
@@ -666,6 +877,7 @@ class ExcelImporter:
         # Fortlaufende Nummer je Kürzel-Präfix → eindeutige Raum-IDs,
         # auch wenn ein Raumtyp in mehreren Zeilen steht.
         next_index: dict[str, int] = {}
+        display_names: dict[str, str] = {}
         for i, row in enumerate(rows, 2):
             rtype = row.get("raumtyp (intern)", row.get("raumtyp", "")).strip().lower()
             name = row.get("anzeigename", row.get("name", "")).strip()
@@ -695,8 +907,34 @@ class ExcelImporter:
                     name=f"{name} {idx}" if count > 1 else name,
                 ))
             next_index[prefix] = first_index + count
+            display_names.setdefault(rtype, name or rtype)
 
+        self._sync_room_config(rooms, display_names)
         return rooms
+
+    def _sync_room_config(
+        self, rooms: list[Room], display_names: dict[str, str]
+    ) -> None:
+        """Übernimmt die Räume des Blatts in die Konfiguration.
+
+        Der Solver nimmt die Raumanzahl je Typ aus der Konfiguration;
+        ohne diesen Abgleich blieben Änderungen im Blatt wirkungslos.
+        """
+        if not rooms:
+            return
+        counts: dict[str, int] = {}
+        for room in rooms:
+            counts[room.room_type] = counts.get(room.room_type, 0) + 1
+        self.config = self.config.model_copy(update={
+            "rooms": RoomConfig(special_rooms=[
+                SpecialRoomDef(
+                    room_type=room_type,
+                    display_name=display_names[room_type],
+                    count=count,
+                )
+                for room_type, count in counts.items()
+            ])
+        })
 
     # ── Stundentafel ───────────────────────────────────────────────────────
 
@@ -776,12 +1014,7 @@ class ExcelImporter:
                 f"{CURRICULUM_SHEET}: Jahrgang {grade} fehlt im Blatt – "
                 f"es gilt die eingebaute Stundentafel."
             )
-        return {
-            subject: hours
-            for subject, hours
-            in STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {}).items()
-            if hours > 0
-        }
+        return builtin_curriculum().get(grade, {})
 
     # ── Klassen aus Jahrgänge-Blatt ────────────────────────────────────────
 
@@ -1030,19 +1263,9 @@ class ExcelImporter:
         # Zeitraster optional überschreiben
         self.import_time_grid()
 
-        # Fächer aus SUBJECT_METADATA
-        subjects = [
-            Subject(
-                name=name,
-                short_name=meta["short"],
-                category=meta["category"],
-                is_hauptfach=meta["is_hauptfach"],
-                requires_special_room=meta["room"],
-                double_lesson_required=meta["double_required"],
-                double_lesson_preferred=meta["double_preferred"],
-            )
-            for name, meta in SUBJECT_METADATA.items()
-        ]
+        # Fächerliste (Blatt "Fächer", sonst die Vorschlagsliste)
+        subjects = self.import_subjects()
+        self._set_known_subjects(subjects)
 
         # Räume
         try:

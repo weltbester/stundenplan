@@ -22,10 +22,10 @@ import string
 from typing import Optional
 
 from config.schema import SchoolConfig
-from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1, SUBJECT_METADATA
+from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1
 from models.teacher import Teacher
 from models.school_class import SchoolClass
-from models.subject import Subject
+from models.subject import Subject, default_subjects
 from models.room import Room
 from models.coupling import Coupling, CouplingGroup
 from models.school_data import SchoolData
@@ -124,19 +124,8 @@ class FakeDataGenerator:
     # ─── Fächer ───────────────────────────────────────────────────────────────
 
     def _generate_subjects(self) -> list[Subject]:
-        """Erzeugt alle Fächer aus den SUBJECT_METADATA."""
-        subjects = []
-        for name, meta in SUBJECT_METADATA.items():
-            subjects.append(Subject(
-                name=name,
-                short_name=meta["short"],
-                category=meta["category"],
-                is_hauptfach=meta["is_hauptfach"],
-                requires_special_room=meta["room"],
-                double_lesson_required=meta["double_required"],
-                double_lesson_preferred=meta["double_preferred"],
-            ))
-        return subjects
+        """Erzeugt die vorgeschlagene Fächerliste."""
+        return default_subjects()
 
     # ─── Klassen ──────────────────────────────────────────────────────────────
 

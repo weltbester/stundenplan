@@ -260,9 +260,10 @@ Die Vorlage enthält folgende Tabellenblätter:
 |-------|--------|
 | Zeitraster | Slot-Nummern, Uhrzeiten, Sek-II-only-Flag |
 | Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden |
+| Fächer | Fächerliste der Schule: Kürzel, Kategorie, Hauptfach, Fachraum-Typ, Doppelstunde |
 | Stundentafel | Jahrgang × Fach = Wochenstunden (wird importiert; leere Zelle = Fach entfällt) |
 | Lehrkräfte | Name, Kürzel, Fächer, Deputat, Sperrzeiten |
-| Fachräume | Raumtyp, Name, Anzahl |
+| Fachräume | Raumtyp, Name, Anzahl (gilt beim Import auch für den Solver) |
 | Kopplungen | Typ, Klassen, Gruppen, Stunden (aus der Konfiguration vorausgefüllt) |
 | Unterrichtsverteilung | Klasse × Fach: Kürzel der Lehrkraft |
 
@@ -272,10 +273,33 @@ Sperrzeiten-Format in der Lehrkräfte-Liste: `Mo1,Di3,Fr5`
 Hinweise zum Import:
 - Die Beispielzeile im Blatt *Lehrkräfte* beginnt mit `Beispiel:` und wird
   übersprungen. Eigene Zeilen dürfen nicht so beginnen.
-- Es sind nur die im Programm bekannten Fächer möglich; unbekannte
-  Fachnamen führen zu einem Fehler mit Zellbezug.
+- Fachnamen in *Stundentafel*, *Lehrkräfte* und *Unterrichtsverteilung*
+  müssen im Blatt *Fächer* stehen (Groß-/Kleinschreibung egal). Ein
+  unbekannter Name ist ein Fehler mit Zellbezug; ein ähnliches Fach wird
+  nur vorgeschlagen, nie stillschweigend eingesetzt.
 - Steht ein Raumtyp in mehreren Zeilen, werden die Räume zusammengezählt
   (mit Warnung).
+
+### Eigene Fächer
+
+Das Blatt **Fächer** ist die Fächerliste der Schule. Es ist mit den
+üblichen Fächern vorausgefüllt (auch Wirtschaft-Politik, Praktische
+Philosophie, Spanisch, Niederländisch, Ergänzungsstunde) und frei
+erweiterbar.
+
+| Spalte | Bedeutung |
+|--------|-----------|
+| Fach | Name, wie er in den anderen Blättern verwendet wird |
+| Kürzel | Anzeige im Plan |
+| Kategorie | `hauptfach`, `sprache`, `nw`, `musisch`, `sport`, `gesellschaft`, `wpf`, `sonstig` (bestimmt die Farbe) |
+| Hauptfach | `ja` / `nein` |
+| Fachraum-Typ | Raumtyp aus dem Blatt *Fachräume*; leer = Klassenraum |
+| Doppelstunde | `nein`, `bevorzugt` oder `Pflicht` |
+
+Ein neues Fach braucht eine Zeile im Blatt *Fächer*, eine Zeile mit
+demselben Namen im Blatt *Stundentafel* und mindestens eine Lehrkraft
+mit diesem Fach. Fehlt das Blatt *Fächer* (ältere Mappen), gilt die
+vorgeschlagene Liste.
 
 ### Unterrichtsverteilung vorgeben
 

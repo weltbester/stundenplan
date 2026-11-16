@@ -242,6 +242,11 @@ STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
 # ─── FACH-METADATEN ───
 # Pro Fach: Kürzel, Kategorie, ob Hauptfach, benötigter Raumtyp,
 # ob Doppelstunden vorgeschrieben/bevorzugt sind.
+#
+# Das ist nur der Vorschlag für eine neue Fächerliste (Blatt "Fächer"
+# der Excel-Vorlage, Testdaten). Maßgeblich ist immer die Fächerliste
+# des Datensatzes (`SchoolData.subjects`); Solver, Prüfungen und
+# Exporte lesen diese Tabelle nicht.
 
 SUBJECT_METADATA: dict[str, dict] = {
     "Deutsch": {
@@ -385,6 +390,47 @@ SUBJECT_METADATA: dict[str, dict] = {
         "category":         "wpf",
         "is_hauptfach":     False,
         "room":             None,   # je nach gewähltem WPF-Fach
+        "double_required":  False,
+        "double_preferred": False,
+    },
+    # ── Weitere Fächer der NRW-Stundentafel (G9) ──
+    "Wirtschaft-Politik": {
+        "short":            "WiPo",
+        "category":         "gesellschaft",
+        "is_hauptfach":     False,
+        "room":             None,
+        "double_required":  False,
+        "double_preferred": False,
+    },
+    "Praktische Philosophie": {
+        "short":            "PP",
+        "category":         "gesellschaft",
+        "is_hauptfach":     False,
+        "room":             None,
+        "double_required":  False,
+        "double_preferred": False,
+    },
+    "Spanisch": {
+        "short":            "Spa",
+        "category":         "sprache",
+        "is_hauptfach":     True,
+        "room":             None,
+        "double_required":  False,
+        "double_preferred": True,
+    },
+    "Niederländisch": {
+        "short":            "Nl",
+        "category":         "sprache",
+        "is_hauptfach":     True,
+        "room":             None,
+        "double_required":  False,
+        "double_preferred": True,
+    },
+    "Ergänzungsstunde": {
+        "short":            "Erg",
+        "category":         "sonstig",
+        "is_hauptfach":     False,
+        "room":             None,
         "double_required":  False,
         "double_preferred": False,
     },

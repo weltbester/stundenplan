@@ -419,6 +419,8 @@ def cmd_template(
         "\nBlätter in der Vorlage:\n"
         "  [cyan]Zeitraster[/cyan]    – Stundenraster (vorausgefüllt aus Config)\n"
         "  [cyan]Jahrgänge[/cyan]     – Jahrgangsdefinition (vorausgefüllt)\n"
+        "  [cyan]Fächer[/cyan]        – Fächerliste: Kürzel, Kategorie, "
+        "Fachraum, Doppelstunde (erweiterbar)\n"
         "  [cyan]Stundentafel[/cyan]  – Fach × Jahrgang Matrix (vorausgefüllt)\n"
         "  [cyan]Lehrkräfte[/cyan]    – Eingabe: Name, Kürzel, Fächer, Deputat, ...\n"
         "  [cyan]Fachräume[/cyan]     – Fachraum-Typen und Anzahl\n"
@@ -551,11 +553,10 @@ def _build_mini_school_data():
         TeacherConfig, SolverConfig,
     )
     from config.defaults import (
-        default_time_grid, default_rooms,
-        SUBJECT_METADATA, STUNDENTAFEL_GYMNASIUM_SEK1,
+        default_time_grid, default_rooms, STUNDENTAFEL_GYMNASIUM_SEK1,
     )
     from models.school_data import SchoolData
-    from models.subject import Subject
+    from models.subject import default_subjects
     from models.room import Room
     from models.teacher import Teacher
     from models.school_class import SchoolClass
@@ -581,13 +582,7 @@ def _build_mini_school_data():
     )
     sek1_max = config.time_grid.sek1_max_slot
 
-    subjects = [
-        Subject(name=n, short_name=m["short"], category=m["category"],
-                is_hauptfach=m["is_hauptfach"], requires_special_room=m["room"],
-                double_lesson_required=m["double_required"],
-                double_lesson_preferred=m["double_preferred"])
-        for n, m in SUBJECT_METADATA.items()
-    ]
+    subjects = default_subjects()
     rooms = []
     for rd in config.rooms.special_rooms:
         pfx = rd.room_type[:2].upper()

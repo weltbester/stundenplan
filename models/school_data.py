@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from models.subject import Subject
+from models.subject_check import check_subject_references
 from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.room import Room
@@ -102,6 +103,7 @@ class SchoolData(BaseModel):
         4. Kopplungen: qualifizierte Lehrer vorhanden
         5. Gesamtbilanz: Summe Deputate ≥ Summe Stundenbedarf
         6. Vorgegebene Unterrichtsverteilung: Verweise, Deputat, Sperrzeiten
+        7. Alle verwendeten Fächer stehen in der Fächerliste
         """
         errors: list[str] = []
         warnings: list[str] = []
@@ -298,6 +300,11 @@ class SchoolData(BaseModel):
         )
         errors.extend(fixed_errors)
         warnings.extend(fixed_warnings)
+
+        # ── 7. Fächerliste ───────────────────────────────────────────────
+        errors.extend(check_subject_references(
+            self.subjects, self.classes, self.teachers, self.couplings
+        ))
 
         return FeasibilityReport(
             is_feasible=len(errors) == 0,

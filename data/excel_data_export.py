@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from data.excel_import import (
-    _DAY_NAMES, ASSIGNMENT_SHEET, coupling_row, generate_template,
+    _DAY_NAMES, ASSIGNMENT_SHEET, CurriculumTable, coupling_row,
+    generate_template,
 )
 from models.coupling import Coupling
 from models.fixed_assignment import FixedAssignment
+from models.school_class import SchoolClass
 from models.school_data import SchoolData
 from models.teacher import Teacher
 from solver.scheduler import ScheduleSolution
@@ -40,7 +42,9 @@ def export_workbook(
     import openpyxl
 
     path = Path(path)
-    generate_template(data.config, path)
+    generate_template(
+        data.config, path, data.subjects, grade_curriculum(data.classes)
+    )
     workbook = openpyxl.load_workbook(path)
 
     assignments = list(data.fixed_assignments)
@@ -53,6 +57,22 @@ def export_workbook(
     _fill_couplings(workbook[COUPLING_SHEET], couplings)
     _fill_assignments(workbook[ASSIGNMENT_SHEET], assignments)
     workbook.save(path)
+
+
+def grade_curriculum(classes: list[SchoolClass]) -> CurriculumTable:
+    """Stundentafel je Jahrgang aus den Klassen des Datensatzes.
+
+    Das Blatt 'Stundentafel' kennt nur eine Spalte je Jahrgang; es gilt
+    die Stundentafel der ersten Klasse des Jahrgangs.
+    """
+    table: CurriculumTable = {}
+    for school_class in classes:
+        table.setdefault(school_class.grade, {
+            subject: hours
+            for subject, hours in school_class.curriculum.items()
+            if hours > 0
+        })
+    return table
 
 
 def assignments_from_solution(

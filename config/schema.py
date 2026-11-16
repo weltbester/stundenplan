@@ -237,7 +237,7 @@ class CouplingConfig(BaseModel):
     # Angebotene Wahlpflichtfächer
     wpf_subjects: list[str] = Field(
         default=["Informatik", "Französisch"],
-        description="Angebotene WPF-Fächer (müssen in SUBJECT_METADATA vorhanden sein)")
+        description="Angebotene WPF-Fächer (aus der Fächerliste)")
     # Wochenstunden für WPF
     wpf_hours: int = Field(3,
         description="Wochenstunden WPF")

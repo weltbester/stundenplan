@@ -20,7 +20,7 @@ from config.defaults import (
     default_rooms,
     default_school_config,
     default_time_grid,
-    STUNDENTAFEL_GYMNASIUM_SEK1,
+    STUNDENTAFEL_LEGACY,
     SUBJECT_METADATA,
 )
 from config.manager import ConfigManager
@@ -77,7 +77,7 @@ class TestDefaultConfig:
         """Stundentafel enthält alle Jahrgänge 5-10."""
         gc = default_grades()
         for g in gc.grade_numbers:
-            assert g in STUNDENTAFEL_GYMNASIUM_SEK1, f"Jahrgang {g} fehlt in Stundentafel"
+            assert g in STUNDENTAFEL_LEGACY, f"Jahrgang {g} fehlt in Stundentafel"
 
     def test_subject_metadata_not_empty(self):
         """SUBJECT_METADATA enthält alle relevanten Fächer."""

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from models.subject import Subject
 from models.deputat_check import check_target_balance, total_target_hours
 from models.subject_check import check_subject_references
+from models.weekly_frame_check import check_weekly_frame
 from models.teacher import format_hours
 from models.teacher import Teacher
 from models.school_class import SchoolClass
@@ -111,6 +112,7 @@ class SchoolData(BaseModel):
         6. Vorgegebene Unterrichtsverteilung: Verweise, Deputat, Sperrzeiten
         7. Alle verwendeten Fächer stehen in der Fächerliste
         8. Soll-Deputate passen zum Unterrichtsbedarf (Warnung)
+        9. Wochenstunden je Jahrgang im Rahmen des Landes (Warnung)
         """
         errors: list[str] = []
         warnings: list[str] = []
@@ -192,19 +194,15 @@ class SchoolData(BaseModel):
                     subject_need[subj] = subject_need.get(subj, 0) + hours
 
         # Fächer, die über Kopplungen abgedeckt werden → kein direkter Kapazitäts-Check.
-        # Für WPF: Curriculum-Eintrag "WPF" wird via Kopplung besetzt.
+        # Für WPF und Schienen: der Curriculum-Eintrag ("WPF",
+        #   "2. Fremdsprache") wird via Kopplung besetzt.
         # Für Reli/Ethik: "Religion" im Curriculum entspricht dem Kopplungs-Pool;
         #   der tatsächliche Bedarf je Lehrer ist wegen Gruppenaufteilung viel kleiner
         #   (z.B. 36 Klassen × 2h → 3 Gruppen à je 12h ≠ 72h für einen Lehrer).
         #   Die Lehrerkapazität wird separat im Kopplungs-Check (Abschnitt 4) geprüft.
         coupling_covered: set[str] = set()
         for coupling in self.couplings:
-            if coupling.coupling_type == "wpf":
-                coupling_covered.add("WPF")
-            elif coupling.coupling_type == "reli_ethik":
-                # Alle Fächer der Gruppen (Religion, Ethik) vom Haupt-Check ausschließen
-                for group in coupling.groups:
-                    coupling_covered.add(group.subject)
+            coupling_covered.update(coupling.curriculum_subjects())
 
         # Lehrer-Kapazität pro Fach (Summe aller Deputate der Lehrkräfte dieses Fachs)
         subject_capacity: dict[str, int] = {}
@@ -318,6 +316,9 @@ class SchoolData(BaseModel):
             self.teachers, self.classes, self.couplings,
             self.config.teachers.deputat_max_buffer,
         ))
+
+        # ── 9. Wochenstundenrahmen des Landes ────────────────────────────
+        warnings.extend(check_weekly_frame(self.classes, self.config))
 
         return FeasibilityReport(
             is_feasible=len(errors) == 0,

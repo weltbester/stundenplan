@@ -346,7 +346,10 @@ class SolutionValidator:
         Zwei Stunden am selben Tag sind nur als konfigurierter
         Doppelstunden-Block erlaubt. Kopplungen werden pro Kopplung
         gezählt, weil parallele Gruppen denselben Slot belegen.
+        Entfällt, wenn die Regel in der Konfiguration ausgeschaltet ist.
         """
+        if not school_data.config.solver.subject_day_limit:
+            return []
         block_pairs = {
             (db.slot_first, db.slot_second)
             for db in school_data.config.time_grid.double_blocks

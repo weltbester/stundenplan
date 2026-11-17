@@ -24,7 +24,7 @@ dafür im Programm fehlt.
 | HE | G8 oder G9 je Schule | G9: 57 (5–6) + 118 (7–10) + 4–6; G8: 60 + 100 (7–9) + 5–6 | 25,5 (ab 61 Jahren: 25) |
 | MV | G8, ab Kl. 7 | 32, 34, 35, 37 | 23–27, je nach Oberstufen-Einsatz |
 | NI | G9 | 29, 30, 30, 30, 31, 31 | 23,5 |
-| NW | G9 (G8 weiter in der APO-S I) | G9: 28–30 in Kl. 5–6, 30–33 in Kl. 7–10, gesamt 180–188; G8: 163 über Kl. 5–9 | 25,5 |
+| NW | G9 (G8 weiter in der APO-S I) | G9: 28–30 in Kl. 5–6, 30–33 in Kl. 7–10, gesamt 182–188 (KMK-Übersicht: 180–188); G8: 163 über Kl. 5–9 | 25,5 |
 | RP | G9; G8 an Ganztagsschulen | G9: 30, 30, 30, 30, 31, 30; G8: 30, 30, 33, 34, 35 | 24 |
 | SL | G9 aufwachsend seit 2023/24, G8 auslaufend | G9: 28, 28, 30, 30, 30, 32 | 26 (25 ab 8 Std. Oberstufe) |
 | SN | G8 | mindestens 29, 31, 32, 33, 35, 36, dazu 7 flexible Stunden | 26 |
@@ -85,11 +85,23 @@ mehrere Jahrgänge vor; die Schule legt die Verteilung je Jahrgang fest.
 - Keine Vorschrift zu Doppelstunden oder zur Verteilung eines Fachs über
   die Woche.
 
-**NRW, Stundentafel G9 (APO-S I, Anlage 3a):** 180 Kernstunden plus 0–8
-Ergänzungsstunden; 2. Fremdsprache in der Regel ab Kl. 7 (möglich ab
-Kl. 5), Wahlpflichtunterricht in Kl. 9–10, Fach "Wirtschaft-Politik",
-"Religionslehre/Praktische Philosophie". Die abgerufene Fassung ist als
-"auslaufend" gekennzeichnet; die Nachfolgefassung ist noch zu prüfen.
+**NRW, Stundentafel G9 (APO-S I, Anlage 3a):** 182 Kernstunden (59 in
+Kl. 5–6, 123 in Kl. 7–10) plus 0–6 Ergänzungsstunden, gesamt 182–188;
+Informatik mit 2 Stunden in Kl. 5–6 (oder nur Kl. 6); 2. Fremdsprache in
+der Regel ab Kl. 7 (möglich ab Kl. 5), Wahlpflichtunterricht in
+Kl. 9–10, Fach "Wirtschaft-Politik", "Religionslehre/Praktische
+Philosophie". Mindeststunden über die Sek I: Geschichte und
+Wirtschaft-Politik je 8, Erdkunde 7, Biologie, Chemie, Physik je 7,
+Kunst und Musik je 7; Chemie in der Regel ab Kl. 7. Eine dritte
+Fremdsprache im Wahlpflichtbereich braucht 8 Stunden (2 davon
+Ergänzungsstunden). Die Schulkonferenz kann bis zu zwei Kernstunden
+zwischen den Kontingenten verschieben.
+
+Die ältere, als "auslaufend" gekennzeichnete Fassung ohne Informatik
+hatte 180 Kernstunden (57 + 123) plus 0–8 Ergänzungsstunden. Welche
+Fassung für welchen Jahrgang gilt, ist vor einem Echteinsatz zu prüfen.
+Die eingebaute Beispielverteilung (`config/nrw_g9.py`, Tabelle im
+README) folgt der Fassung mit Informatik.
 
 **NRW, Lehrerstunden (VO zu § 93 Abs. 2 SchulG):** 25,5 am Gymnasium; aus
 schulischen Gründen bis zu sechs Monate um bis zu sechs Stunden über-
@@ -106,26 +118,29 @@ zulässig; Kunst und Musik in Kl. 8–9 im jährlichen Wechsel möglich.
 
 ## 4. Stand des Programms (November 2026)
 
-Die Einstellung `bundesland` ist nur ein Etikett; keine Regel hängt
-davon ab. Alles Landesspezifische muss über die Eingabedaten kommen.
+Die Einstellung `bundesland` steuert nur eine Warnung (den
+Wochenstundenrahmen für NRW); keine Regel des Solvers hängt davon ab.
+Alles andere Landesspezifische muss über die Eingabedaten kommen.
 
 | Anforderung | Stand | Anmerkung |
 |---|---|---|
 | Unterrichtsverteilung vor der Planung festgelegt | Ja | Blatt "Unterrichtsverteilung". Ermäßigungen, Hamburger Faktoren und bayerische Fachregeln sind damit schon vor dem Solver entschieden. |
 | Stundenzahl je Lehrkraft, Teilzeit | Ja | Soll-Deputat je Lehrkraft, auch halbe Stunden (25,5 oder 23,5); der Plan selbst hat ganze Stunden, die Abweichung vom Soll wird ausgewiesen. |
 | Stundentafel je Jahrgang | Ja | Über das Excel-Blatt "Stundentafel". |
-| Eingebaute Standard-Stundentafel | Nein | 28, 31, 34, 34, 34, 34 (Summe 195), Latein ab Kl. 6; entspricht keinem Land. |
+| Eingebaute Standard-Stundentafel | Ja (NRW G9) | Beispielverteilung nach Anlage 3a: 30, 30, 32, 32, 32, 32 (Summe 188). Die Testdaten aus `generate` nutzen noch die alte Tafel, die keinem Land entspricht. |
 | G8 und G9 in verschiedenen Jahrgängen einer Schule | Ja | Jeder Jahrgang hat eine eigene Zeile. |
 | G8- und G9-Klassen im selben Jahrgang | Nein | Der Import kennt eine Tafel je Jahrgang (das Datenmodell je Klasse könnte es). |
 | Schulen mit Kl. 7–10 oder 5–9 | Ungetestet | Konfigurierbar; die eingebaute Tafel deckt nur 5–10 ab. |
 | Fächer aller Länder | Ja | Freie Fächerliste im Excel-Blatt "Fächer" (Kürzel, Fachraum, Doppelstunde je Fach). |
 | Wochen über 35 Stunden | Nein | Eine 8. Stunde ist konfigurierbar, aber keine Regel für Mittagspause, Nachmittage je Klasse oder Minuten pro Tag. |
 | Religion/Ethik, Wahlpflicht | Ja | Kopplungen. |
-| Sprachen-Schienen, Zweige, geteilte Gruppen | Ungetestet | Vermutlich als Kopplung abbildbar. |
+| Sprachen-Schienen | Ja | Kopplungstyp `band` mit "Fach der Stundentafel" (z.B. Französisch/Latein für "2. Fremdsprache"). Getestet mit kleinen Datensätzen; der Test in Schulgröße folgt mit den NRW-Testdaten. |
+| Zweige, geteilte Gruppen | Ungetestet | Vermutlich als Kopplung abbildbar. |
 | Halbe Stunden, Epochenunterricht, A/B-Wochen | Nein | Nur ganze Wochenstunden. |
 | Andere Stundenlängen als 45 Minuten | Teilweise | Zeiten konfigurierbar; die Schule rechnet ihre Tafel selbst um. |
 | Samstagsunterricht | Teilweise | 6-Tage-Woche geht; "zwei Samstage im Monat" nicht. |
-| Höchstens eine Stunde oder ein Doppelblock je Fach und Tag (C15) | Eigene Regel | Kein Land schreibt sie vor; derzeit nicht abschaltbar. |
+| Höchstens eine Stunde oder ein Doppelblock je Fach und Tag (C15) | Eigene Regel | Kein Land schreibt sie vor; abschaltbar mit `solver.subject_day_limit: false`. |
+| Wochenstundenrahmen je Jahrgang | Nur NRW G9 | Warnung im Machbarkeits-Check; andere Länder brauchen nur ihre Zahlen (`models/weekly_frame_check.py`). |
 | Lehrkräfte mit Sek-II-Anteil | Teilweise | Nur über Sperrzeiten. |
 
 Nicht bestätigt: der Kommentar im Solver, 7 Springstunden pro Woche seien
@@ -135,7 +150,7 @@ gefunden.
 ## 5. Was eine Erweiterung je Familie braucht
 
 Voraussetzung für alle: freie Fächerliste, halbe Lehrerstunden, C15
-abschaltbar (geplant im NRW-Schritt 4).
+abschaltbar (alle drei umgesetzt).
 
 | Ziel | Zusätzlich nötig |
 |---|---|
@@ -161,6 +176,7 @@ Grundsätze für die Umsetzung:
 - [KMK: Pflichtstunden der Lehrkräfte 2025/2026](https://www.kmk.org/fileadmin/Dateien/pdf/Statistik/Dokumentationen/Pflichtstunden_der_LehrerInnen_2025_2026.pdf)
 - [KMK: Wochenpflichtstunden der Schülerinnen und Schüler 2025/2026](https://www.kmk.org/fileadmin/Dateien/pdf/Statistik/Dokumentationen/Wochenpflichtstunden_der_SchuelerInnen_2025_2026.pdf)
 - [NRW: Verordnung zu § 93 Abs. 2 Schulgesetz](https://recht.nrw.de/lrgv/rechtsverordnung/01082026-verordnung-zur-ausfuehrung-des-ss-93-abs-2-schulgesetz-vo-zu-ss-93/)
+- [NRW: Stundentafel Gymnasium G9, Anlage 3a (Fassung mit Informatik)](https://recht.nrw.de/system/files/BHA/26521-42935-sgv_223_20121102_1_anlage3a.pdf)
 - [NRW: Stundentafel Gymnasium G9, Anlage 3a (auslaufende Fassung)](https://www.schulministerium.nrw/system/files/media/document/file/Stundentafel_SI_G9_Anlage_3a_auslaufend.pdf)
 - [NRW: Stundentafel Gymnasium G8](https://www.schulministerium.nrw/sites/default/files/documents/Stundentafel.pdf)
 - [NRW: Runderlass Unterrichtsbeginn, Verteilung der Wochenstunden, Fünf-Tage-Woche (BASS 12-63 Nr. 3)](https://bass.schule.nrw/15325.htm)

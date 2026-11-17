@@ -11,8 +11,11 @@ Löst die Stundenzuweisung als Constraint-Satisfaction-Problem mit Google OR-Too
   wird gemeinsam mit der Stundenzuweisung optimiert.
 - **Doppelstunden**: Pflicht- und optionale Doppelstunden, nur in konfigurierten
   Blöcken (nie über Pausen hinweg).
-- **Klassenübergreifende Kopplungen**: Religion/Ethik und Wahlpflichtfächer (WPF)
-  werden korrekt über Parallelklassen hinweg modelliert.
+- **Klassenübergreifende Kopplungen**: Religion/Ethik, Wahlpflichtfächer (WPF)
+  und die Sprachen-Schiene der zweiten Fremdsprache werden über
+  Parallelklassen hinweg modelliert.
+- **Stundentafel NRW G9**: Die Vorlage bringt eine Beispielverteilung
+  nach APO-S I mit; jede Schule trägt ihre eigene ein.
 - **Fachraum-Zuweisung**: Konkrete Räume (z.B. CH-1, CH-2) werden gleichmäßig belegt.
 - **Export**: Excel-Arbeitsmappen und PDF-Dateien mit Uhrzeiten, Pausenzeilen und
   Farbcodierung.
@@ -230,9 +233,9 @@ time_grid:
 grades:
   grades:
     - {grade: 5,  num_classes: 6, weekly_hours_target: 30}
-    - {grade: 6,  num_classes: 6, weekly_hours_target: 31}
+    - {grade: 6,  num_classes: 6, weekly_hours_target: 30}
     # ...
-    - {grade: 10, num_classes: 6, weekly_hours_target: 34}
+    - {grade: 10, num_classes: 6, weekly_hours_target: 32}
 ```
 
 ### Lehrkräfte
@@ -276,7 +279,13 @@ solver:
   weight_compact: 30
   weight_day_wishes: 20
   weight_deputat_deviation: 50  # Nähe zum Soll-Deputat (immer aktiv)
+  subject_day_limit: true   # Regel C15 (siehe Constraint-Übersicht)
 ```
+
+`subject_day_limit: false` schaltet die Regel C15 ab. Solver und
+`validate --solution` lesen die Einstellung aus dem Datensatz
+(`output/school_data.json`), in den die Konfiguration bei `generate`
+und `import` übernommen wird.
 
 ---
 
@@ -296,10 +305,10 @@ Die Vorlage enthält folgende Tabellenblätter:
 | Zeitraster | Slot-Nummern, Uhrzeiten, Sek-II-only-Flag |
 | Jahrgänge | Jahrgang, Klassenanzahl, Soll-Stunden |
 | Fächer | Fächerliste der Schule: Kürzel, Kategorie, Hauptfach, Fachraum-Typ, Doppelstunde |
-| Stundentafel | Jahrgang × Fach = Wochenstunden (wird importiert; leere Zelle = Fach entfällt) |
+| Stundentafel | Jahrgang × Fach = Wochenstunden (wird importiert; leere Zelle = Fach entfällt); vorausgefüllt mit einer Beispielverteilung für NRW G9 |
 | Lehrkräfte | Name, Kürzel, Fächer, Deputat (Soll, auch `25,5`), Sperrzeiten |
 | Fachräume | Raumtyp, Name, Anzahl (gilt beim Import auch für den Solver) |
-| Kopplungen | Typ, Klassen, Gruppen, Stunden (aus der Konfiguration vorausgefüllt) |
+| Kopplungen | Typ (`reli_ethik`, `wpf`, `band`), Klassen, Gruppen, Stunden, Fach der Stundentafel (aus Konfiguration und Stundentafel vorausgefüllt) |
 | Unterrichtsverteilung | Klasse × Fach: Kürzel der Lehrkraft |
 
 Sperrzeiten-Format in der Lehrkräfte-Liste: `Mo1,Di3,Fr5`
@@ -314,6 +323,62 @@ Hinweise zum Import:
   nur vorgeschlagen, nie stillschweigend eingesetzt.
 - Steht ein Raumtyp in mehreren Zeilen, werden die Räume zusammengezählt
   (mit Warnung).
+
+### Eingebaute Stundentafel (NRW, Gymnasium G9)
+
+Das Blatt *Stundentafel* ist mit einer Beispielverteilung für das
+Gymnasium G9 in NRW vorausgefüllt (`config/nrw_g9.py`). Die Verordnung
+(APO-S I, Anlage 3a) gibt nur Kontingente für Kl. 5–6 und Kl. 7–10
+vor; die Verteilung auf die Jahrgänge beschließt jede Schule selbst.
+Die Tafel ist also **eine** zulässige Verteilung, kein Vorschlag des
+Landes. Bitte die Zahlen der eigenen Schule eintragen.
+
+| Fach | 5 | 6 | 7 | 8 | 9 | 10 | Summe |
+|------|---|---|---|---|---|---|---|
+| Deutsch | 5 | 4 | 4 | 3 | 3 | 3 | 22 |
+| Mathematik | 4 | 5 | 3 | 4 | 3 | 3 | 22 |
+| Englisch | 5 | 4 | 4 | 3 | 3 | 3 | 22 |
+| Physik | – | 2 | – | 2 | 2 | 2 | 8 |
+| Chemie | – | – | 2 | 2 | 2 | 1 | 7 |
+| Biologie | 2 | 2 | 2 | – | – | 2 | 8 |
+| Informatik | – | 2 | – | – | – | – | 2 |
+| Kunst | 2 | 2 | – | 2 | 2 | – | 8 |
+| Musik | 2 | 1 | 2 | 2 | – | 2 | 9 |
+| Sport | 4 | 3 | 3 | 3 | 3 | 2 | 18 |
+| Geschichte | – | 2 | 2 | 2 | – | 2 | 8 |
+| Erdkunde | 2 | – | 2 | – | 2 | 1 | 7 |
+| Religion | 2 | 2 | 2 | 2 | 2 | 2 | 12 |
+| 2. Fremdsprache | – | – | 4 | 4 | 4 | 3 | 15 |
+| WPF | – | – | – | – | 3 | 3 | 6 |
+| Wirtschaft-Politik | 2 | – | – | 2 | 2 | 2 | 8 |
+| Ergänzungsstunde | – | 1 | 2 | 1 | 1 | 1 | 6 |
+| **Summe** | **30** | **30** | **32** | **32** | **32** | **32** | **188** |
+
+- 182 Kernstunden (59 in Kl. 5–6, 123 in Kl. 7–10) und alle
+  6 Ergänzungsstunden, zusammen 188.
+- *Religion* steht für Religionslehre/Praktische Philosophie und läuft
+  wie *WPF* (Wahlpflicht, Kl. 9–10) über eine Kopplung.
+- *2. Fremdsprache* (ab Kl. 7) läuft über eine **Sprachen-Schiene**:
+  eine Kopplung vom Typ `band` je Jahrgang, in der alle Klassen
+  gleichzeitig in Gruppen (Französisch, Latein) unterrichtet werden.
+  Die Vorlage legt je Klasse eine Gruppe an, abwechselnd auf die
+  Sprachen verteilt; die Sprachen stehen in der Konfiguration unter
+  `couplings.second_language_subjects`. Anzahl und Fach der Gruppen
+  lassen sich im Blatt *Kopplungen* ändern.
+- Die Spalte *Fach der Stundentafel* im Blatt *Kopplungen* sagt, für
+  welches Fach der Stundentafel die Gruppen zählen. Sie ist nur nötig,
+  wenn dieses Fach anders heißt als die Fächer der Gruppen.
+- Fehlt das Blatt *Stundentafel* in einer Mappe, gilt diese Tafel
+  (früher: eine ältere Beispiel-Tafel, die keinem Land entsprach).
+
+Der Machbarkeits-Check warnt, wenn ein Jahrgang den Wochenstundenrahmen
+verlässt (NRW G9: 28–30 Stunden in Kl. 5–6, 30–33 in Kl. 7–10). Geprüft
+wird nur bei `bundesland: NRW` und Schulform Gymnasium.
+
+Die Testdaten aus `main.py generate` nutzen bis auf Weiteres die ältere
+Beispiel-Tafel (28, 31, 32, 32, 34, 34 Stunden), auf die ihr
+Lehrkräfte-Pool abgestimmt ist. Der Check meldet dort deshalb
+Jahrgänge außerhalb des Rahmens.
 
 ### Eigene Fächer
 
@@ -417,7 +482,7 @@ stundenplan/
 | C12 | Doppelstunden nur in konfigurierten Blöcken | Hart |
 | C13 | Doppelstunden-Anzahl erfüllt | Hart |
 | C14 | Springstunden-Limit (optional) | Hart/Weich |
-| C15 | Pro Klasse, Fach und Tag max. 1 Stunde oder 1 Doppelblock | Hart |
+| C15 | Pro Klasse, Fach und Tag max. 1 Stunde oder 1 Doppelblock | Hart (abschaltbar) |
 | S1 | Springstunden minimieren | Weich |
 | S2 | Gleichmäßige Tagesverteilung | Weich |
 | S3 | Wunsch-freie Tage honorieren | Weich |
@@ -427,9 +492,12 @@ stundenplan/
 
 **C15 im Detail:** Zwei Stunden desselben Fachs am selben Tag sind nur
 als konfigurierter Doppelstunden-Block (z.B. 1–2, 3–4, 5–6) erlaubt, drei
-oder mehr nie. Die Regel gilt auch für Kopplungen (Reli/Ethik, WPF).
-`main.py validate --solution` prüft sie unabhängig vom Solver
-(Verstoß: `subject_day_limit`). Das frühere Gewicht
+oder mehr nie. Die Regel gilt auch für Kopplungen (Reli/Ethik, WPF,
+Sprachen-Schiene). `main.py validate --solution` prüft sie unabhängig
+vom Solver (Verstoß: `subject_day_limit`). Kein Bundesland schreibt die
+Regel vor; mit `solver.subject_day_limit: false` entfällt sie in Solver
+und Validator. Dann verteilt nichts mehr ein Fach über die Woche: auch
+drei Stunden desselben Fachs an einem Tag sind möglich. Das frühere Gewicht
 `weight_subject_spread` ist ohne Wirkung und nur noch aus
 Kompatibilitätsgründen in der Konfiguration erlaubt.
 

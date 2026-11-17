@@ -5,10 +5,11 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1, default_school_config
+from config.defaults import STUNDENTAFEL_LEGACY, default_school_config
+from config.nrw_g9 import STUNDENTAFEL_NRW_G9
 from data.excel_import import (
-    CURRICULUM_SHEET, EXAMPLE_PREFIX, ExcelImportError, generate_template,
-    import_from_excel,
+    CURRICULUM_SHEET, EXAMPLE_PREFIX, ExcelImporter, ExcelImportError,
+    builtin_curriculum, generate_template, import_from_excel,
 )
 from data.fake_data import FakeDataGenerator
 from tests.test_fixed_assignments import _matching, _write_mini_workbook
@@ -123,9 +124,13 @@ class TestCouplingSheet:
         generate_template(config, path)
         sheet = openpyxl.load_workbook(path)[COUPLING_SHEET]
         ids = [cell.value for cell in sheet["A"][1:] if cell.value]
-        expected = [c.id for c in FakeDataGenerator(config).generate_couplings()]
+        expected = [
+            c.id for c in FakeDataGenerator(
+                config, curriculum=builtin_curriculum()
+            ).generate_couplings()
+        ]
         assert ids == expected
-        assert "reli_10" in ids and "wpf_9" in ids
+        assert "reli_10" in ids and "wpf_9" in ids and "fs2_7" in ids
 
     def test_import_reads_config_couplings(self, workbook_path: Path):
         config = make_mini_config()
@@ -138,18 +143,18 @@ class TestCouplingSheet:
 
 class TestCurriculumSheet:
 
-    def test_unchanged_sheet_equals_builtin_table(
+    def test_unchanged_sheet_equals_template_table(
         self, workbook_path: Path
     ):
         builtin = {
-            s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[5].items() if h > 0
+            s: h for s, h in STUNDENTAFEL_LEGACY[5].items() if h > 0
         }
         assert _curriculum(workbook_path, "5a") == builtin
 
     def test_changed_hours_are_used(self, workbook_path: Path):
         cell = _curriculum_cell(workbook_path, "Deutsch", 5)
-        _edit(workbook_path, CURRICULUM_SHEET, cell, 5)
-        assert _curriculum(workbook_path, "5a")["Deutsch"] == 5
+        _edit(workbook_path, CURRICULUM_SHEET, cell, 6)
+        assert _curriculum(workbook_path, "5a")["Deutsch"] == 6
         assert _curriculum(workbook_path, "7a")["Deutsch"] == 4
 
     def test_emptied_cell_removes_subject(self, workbook_path: Path):
@@ -178,14 +183,16 @@ class TestCurriculumSheet:
         workbook = openpyxl.load_workbook(workbook_path)
         del workbook[CURRICULUM_SHEET]
         workbook.save(workbook_path)
-        data, report = import_from_excel(workbook_path, make_mini_config())
-        builtin = {
-            s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[5].items() if h > 0
-        }
-        assert next(c for c in data.classes if c.id == "5a").curriculum == (
-            builtin
+        # Die eingebaute NRW-Tafel passt nicht zu den Mini-Lehrkräften;
+        # hier zählt nur, welche Stundentafel die Klassen bekommen.
+        importer = ExcelImporter(workbook_path, make_mini_config())
+        table = importer.import_curriculum()
+        classes = importer.import_classes(table)
+        assert table == {}
+        assert next(c for c in classes if c.id == "5a").curriculum == (
+            STUNDENTAFEL_NRW_G9[5]
         )
-        assert _matching(report.warnings, CURRICULUM_SHEET) == []
+        assert _matching(importer._warnings, CURRICULUM_SHEET) == []
 
     def test_missing_grade_column_warns_and_falls_back(
         self, workbook_path: Path

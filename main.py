@@ -426,10 +426,12 @@ def cmd_template(
         "  [cyan]Jahrgänge[/cyan]     – Jahrgangsdefinition (vorausgefüllt)\n"
         "  [cyan]Fächer[/cyan]        – Fächerliste: Kürzel, Kategorie, "
         "Fachraum, Doppelstunde (erweiterbar)\n"
-        "  [cyan]Stundentafel[/cyan]  – Fach × Jahrgang Matrix (vorausgefüllt)\n"
+        "  [cyan]Stundentafel[/cyan]  – Fach × Jahrgang Matrix "
+        "(Beispiel NRW G9, bitte anpassen)\n"
         "  [cyan]Lehrkräfte[/cyan]    – Eingabe: Name, Kürzel, Fächer, Deputat, ...\n"
         "  [cyan]Fachräume[/cyan]     – Fachraum-Typen und Anzahl\n"
-        "  [cyan]Kopplungen[/cyan]    – Reli/Ethik + WPF Kopplungen\n"
+        "  [cyan]Kopplungen[/cyan]    – Reli/Ethik, WPF und "
+        "Sprachen-Schiene\n"
         "  [cyan]Unterrichtsverteilung[/cyan] – Klasse × Fach: Kürzel der "
         "Lehrkraft (leer = Solver entscheidet)"
     )
@@ -558,7 +560,7 @@ def _build_mini_school_data():
         TeacherConfig, SolverConfig,
     )
     from config.defaults import (
-        default_time_grid, default_rooms, STUNDENTAFEL_GYMNASIUM_SEK1,
+        default_time_grid, default_rooms, STUNDENTAFEL_LEGACY,
     )
     from models.school_data import SchoolData
     from models.subject import default_subjects
@@ -596,10 +598,10 @@ def _build_mini_school_data():
                               name=f"{rd.display_name} {i}"))
     classes = [
         SchoolClass(id="5a", grade=5, label="a",
-                    curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[5].items() if h > 0},
+                    curriculum={s: h for s, h in STUNDENTAFEL_LEGACY[5].items() if h > 0},
                     max_slot=sek1_max),
         SchoolClass(id="7a", grade=7, label="a",
-                    curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[7].items() if h > 0},
+                    curriculum={s: h for s, h in STUNDENTAFEL_LEGACY[7].items() if h > 0},
                     max_slot=sek1_max),
     ]
     dep_max = 9  # 10 × 9h = 90h >> Gesamtbedarf (62h inkl. Kopplung) → Solver-Spielraum

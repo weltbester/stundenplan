@@ -38,6 +38,24 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Machbarkeits-Check und `template --from-data` richten sich nach der
   Fächerliste des Datensatzes; Mappen ohne das Blatt und ältere
   JSON-Dateien funktionieren weiter.
+- Eingebaute Stundentafel für NRW, Gymnasium G9 (`config/nrw_g9.py`):
+  eine Beispielverteilung nach APO-S I, Anlage 3a, mit 182 Kernstunden
+  und 6 Ergänzungsstunden (30, 30, 32, 32, 32, 32 Wochenstunden),
+  zweiter Fremdsprache ab Kl. 7, Wahlpflicht in Kl. 9–10, Informatik in
+  Kl. 6. Die Vorlage aus `main.py template` ist damit vorausgefüllt.
+- Sprachen-Schiene: neuer Kopplungstyp `band` und Feld
+  `Coupling.curriculum_subject` ("Fach der Stundentafel"). Die Gruppen
+  einer Schiene (z.B. Französisch, Latein) decken zusammen ein anders
+  benanntes Fach der Stundentafel ab (`2. Fremdsprache`). Neue Spalte
+  "Fach der Stundentafel" im Blatt "Kopplungen"; Mappen ohne die Spalte
+  laden weiter. Die Vorlage legt je Jahrgang mit zweiter Fremdsprache
+  eine Schiene an (Einstellung `couplings.second_language_subjects`).
+- Fach `2. Fremdsprache` in der vorgeschlagenen Fächerliste.
+- Einstellung `solver.subject_day_limit` (Standard `true`): schaltet die
+  Regel C15 in Solver und Validator ab.
+- Machbarkeits-Check: Warnung, wenn ein Jahrgang den
+  Wochenstundenrahmen für NRW G9 verlässt (28–30 in Kl. 5–6, 30–33 in
+  Kl. 7–10; nur bei `bundesland: NRW` und Gymnasium).
 - `solve` rechnet in zwei Stufen: Fehlt die Unterrichtsverteilung
   ganz oder teilweise, entscheidet zuerst ein kleines Modell ohne
   Zeitdimension, wer was unterrichtet (möglichst nah am Soll-Deputat;
@@ -103,6 +121,26 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Blatt "Fächer" (bisher eine feste Liste der ersten 20 Fächer).
 - `.gitignore`: echte Personaldaten (`lehrer.txt`, `lehrer.xlsx`),
   die fremde venv `.macpro/` und `.DS_Store` werden ignoriert.
+- **Verhaltensänderung:** Die eingebaute Stundentafel ist jetzt die
+  NRW-G9-Beispielverteilung. Das betrifft `main.py template` und den
+  Import von Mappen ohne Blatt "Stundentafel" (oder ohne Spalte für
+  einen Jahrgang). Mappen mit eigenem Blatt und gespeicherte
+  JSON-Datensätze sind nicht betroffen.
+- Die bisherige Beispiel-Tafel heißt `STUNDENTAFEL_LEGACY` (vorher
+  `STUNDENTAFEL_GYMNASIUM_SEK1`) und dient nur noch den Testdaten aus
+  `main.py generate` und den "loose"-Benchmarks; beide sind unverändert.
+- Standard-Soll-Stunden der Jahrgänge: 30, 30, 32, 32, 32, 32 (vorher
+  30, 31, 32, 32, 34, 34). Bestehende Konfigurationsdateien behalten
+  ihre Werte.
+- Solver und Machbarkeits-Check bestimmen die über Kopplungen
+  abgedeckten Fächer jetzt mit derselben Regel wie der Validator
+  (`Coupling.curriculum_subjects()`). Für `reli_ethik` und `wpf` ändert
+  sich nichts; bei anderen Typen zählen die Fächer der Gruppen.
+- Blatt "Kopplungen": Spaltenkopf "Typ (reli_ethik/wpf/band)"; der
+  Import erkennt auch den alten Kopf.
+- Blatt "Unterrichtsverteilung" der Vorlage: die Marke "Kopplung"
+  richtet sich nach den Kopplungen der Vorlage statt nach festen
+  Fachnamen.
 - Hilfe-Ausgabe: `main.py` nutzt die aktuellen rich-click-Einstellungen
   (`TEXT_MARKUP` statt `USE_RICH_MARKUP`/`USE_MARKDOWN`, Metavar-Spalte
   als Standard); die drei Abkündigungs-Warnungen entfallen, die Ausgabe

@@ -21,14 +21,19 @@ import random
 import string
 from typing import Optional
 
-from config.schema import SchoolConfig
-from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1
+from config.schema import CouplingConfig, SchoolConfig
+from config.defaults import SECOND_LANGUAGE_SUBJECT, STUNDENTAFEL_LEGACY
 from models.teacher import Teacher
 from models.school_class import SchoolClass
 from models.subject import Subject, default_subjects
 from models.room import Room
-from models.coupling import Coupling, CouplingGroup
+from models.coupling import (
+    COUPLING_TYPE_BAND, Coupling, CouplingGroup,
+)
 from models.school_data import SchoolData
+
+# Jahrgang → Fach → Wochenstunden
+CurriculumTable = dict[int, dict[str, int]]
 
 # ─── Namens-Listen ────────────────────────────────────────────────────────────
 
@@ -116,9 +121,20 @@ def _make_abbreviation(last_name: str, used: set[str]) -> str:
 class FakeDataGenerator:
     """Generiert vollständige Testdaten auf Basis der SchoolConfig."""
 
-    def __init__(self, config: SchoolConfig, seed: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        config: SchoolConfig,
+        seed: Optional[int] = None,
+        curriculum: Optional[CurriculumTable] = None,
+    ) -> None:
+        """`curriculum`: Stundentafel der Klassen; ohne Angabe die alte
+        Tafel, auf die der Lehrkräfte-Pool dieses Generators abgestimmt
+        ist."""
         self.config = config
         self.rng = random.Random(seed)
+        self._curriculum = (
+            curriculum if curriculum is not None else STUNDENTAFEL_LEGACY
+        )
         self._used_abbreviations: set[str] = set()
 
     # ─── Fächer ───────────────────────────────────────────────────────────────
@@ -130,7 +146,7 @@ class FakeDataGenerator:
     # ─── Klassen ──────────────────────────────────────────────────────────────
 
     def _generate_classes(self) -> list[SchoolClass]:
-        """Erzeugt alle Klassen gemäß GradeConfig mit Curriculum aus STUNDENTAFEL."""
+        """Erzeugt alle Klassen gemäß GradeConfig mit ihrer Stundentafel."""
         classes = []
         sek1_max = self.config.time_grid.sek1_max_slot
 
@@ -141,7 +157,7 @@ class FakeDataGenerator:
                 labels = list(string.ascii_lowercase[:grade_def.num_classes])
 
             # Curriculum für diesen Jahrgang (nur Fächer mit > 0 Stunden)
-            raw_curriculum = STUNDENTAFEL_GYMNASIUM_SEK1.get(grade, {})
+            raw_curriculum = self._curriculum.get(grade, {})
             curriculum = {f: h for f, h in raw_curriculum.items() if h > 0}
 
             # Etage: Klassen-5→Etage 1, Klasse 6→Etage 2, usw.
@@ -402,7 +418,8 @@ class FakeDataGenerator:
         return self._generate_couplings(self._generate_classes())
 
     def _generate_couplings(self, classes: list[SchoolClass]) -> list[Coupling]:
-        """Erzeugt Kopplungen für Reli/Ethik und WPF gemäß CouplingConfig."""
+        """Erzeugt Kopplungen für Reli/Ethik, WPF und die Sprachen-Schiene
+        gemäß CouplingConfig."""
         cc = self.config.couplings
         couplings: list[Coupling] = []
 
@@ -412,7 +429,59 @@ class FakeDataGenerator:
         if cc.wpf_enabled:
             couplings.extend(self._generate_wpf_couplings(classes, cc))
 
+        couplings.extend(self._generate_language_bands(classes, cc))
+
         return couplings
+
+    def _generate_language_bands(
+        self, classes: list[SchoolClass], cc: CouplingConfig
+    ) -> list[Coupling]:
+        """Eine Schiene je Jahrgang, dessen Stundentafel die zweite
+        Fremdsprache enthält.
+
+        Die Schiene hat so viele Gruppen wie der Jahrgang Klassen
+        (mindestens eine je Sprache), abwechselnd auf die Sprachen
+        verteilt. Die Stundenzahl kommt aus der Stundentafel.
+        """
+        languages = cc.second_language_subjects
+        if not languages:
+            return []
+
+        hours_by_grade: dict[int, int] = {}
+        classes_by_grade: dict[int, list[str]] = {}
+        for school_class in classes:
+            hours = school_class.curriculum.get(SECOND_LANGUAGE_SUBJECT, 0)
+            if hours > 0:
+                hours_by_grade[school_class.grade] = hours
+                classes_by_grade.setdefault(
+                    school_class.grade, []
+                ).append(school_class.id)
+
+        bands: list[Coupling] = []
+        for grade, class_ids in sorted(classes_by_grade.items()):
+            hours = hours_by_grade[grade]
+            group_count = max(len(class_ids), len(languages))
+            groups = [
+                CouplingGroup(
+                    group_name=(
+                        f"{languages[index % len(languages)]} "
+                        f"{index // len(languages) + 1}"
+                    ),
+                    subject=languages[index % len(languages)],
+                    hours_per_week=hours,
+                )
+                for index in range(group_count)
+            ]
+            bands.append(Coupling(
+                id=f"fs2_{grade}",
+                coupling_type=COUPLING_TYPE_BAND,
+                involved_class_ids=class_ids,
+                groups=groups,
+                hours_per_week=hours,
+                cross_class=True,
+                curriculum_subject=SECOND_LANGUAGE_SUBJECT,
+            ))
+        return bands
 
     def _generate_reli_couplings(self, classes: list[SchoolClass], cc) -> list[Coupling]:
         """Eine Reli/Ethik-Kopplung pro Jahrgang über alle Parallelklassen."""

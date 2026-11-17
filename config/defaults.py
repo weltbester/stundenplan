@@ -73,12 +73,14 @@ def default_grades() -> GradeConfig:
     """Standard: 6 Jahrgänge × 6 Klassen = 36 Klassen."""
     return GradeConfig(
         grades=[
+            # Soll-Stunden wie in der eingebauten NRW-G9-Stundentafel
+            # (config/nrw_g9.py).
             GradeDefinition(grade=5, num_classes=6, weekly_hours_target=30),
-            GradeDefinition(grade=6, num_classes=6, weekly_hours_target=31),
+            GradeDefinition(grade=6, num_classes=6, weekly_hours_target=30),
             GradeDefinition(grade=7, num_classes=6, weekly_hours_target=32),
             GradeDefinition(grade=8, num_classes=6, weekly_hours_target=32),
-            GradeDefinition(grade=9, num_classes=6, weekly_hours_target=34),
-            GradeDefinition(grade=10, num_classes=6, weekly_hours_target=34),
+            GradeDefinition(grade=9, num_classes=6, weekly_hours_target=32),
+            GradeDefinition(grade=10, num_classes=6, weekly_hours_target=32),
         ]
     )
 
@@ -117,11 +119,15 @@ def default_school_config() -> SchoolConfig:
     )
 
 
-# ─── STUNDENTAFEL ───
+# ─── ALTE STUNDENTAFEL (nur noch für die bisherigen Testdaten) ───
 # Jahrgang → Fach → Wochenstunden.
-# Muss zum weekly_hours_target des Jahrgangs passen!
+# Diese Tafel entspricht keinem Bundesland (28, 31, 32, 32, 34, 34;
+# Latein ab Kl. 6). Sie bleibt, weil der Testdaten-Generator
+# (data/fake_data.py) und die "loose"-Benchmarks auf sie abgestimmt sind.
+# Die eingebaute Stundentafel für Vorlage und Import steht in
+# config/nrw_g9.py.
 
-STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
+STUNDENTAFEL_LEGACY: dict[int, dict[str, int]] = {
     5: {
         "Deutsch":      4,
         "Mathematik":   4,
@@ -238,6 +244,11 @@ STUNDENTAFEL_GYMNASIUM_SEK1: dict[int, dict[str, int]] = {
     },  # Summe: 34h (29h regular + 2h Reli-Kopplung + 3h WPF-Kopplung), 1 Slot frei
 }
 
+
+# Unter diesem Fachnamen steht die zweite Fremdsprache in der
+# Stundentafel; unterrichtet wird sie als Sprachen-Schiene (Kopplung
+# mit Gruppen wie Französisch und Latein).
+SECOND_LANGUAGE_SUBJECT = "2. Fremdsprache"
 
 # ─── FACH-METADATEN ───
 # Pro Fach: Kürzel, Kategorie, ob Hauptfach, benötigter Raumtyp,
@@ -379,6 +390,14 @@ SUBJECT_METADATA: dict[str, dict] = {
     },
     "Französisch": {
         "short":            "Fr",
+        "category":         "sprache",
+        "is_hauptfach":     True,
+        "room":             None,
+        "double_required":  False,
+        "double_preferred": True,
+    },
+    SECOND_LANGUAGE_SUBJECT: {
+        "short":            "2FS",
         "category":         "sprache",
         "is_hauptfach":     True,
         "room":             None,

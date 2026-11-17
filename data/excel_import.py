@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from config.schema import RoomConfig, SchoolConfig, SpecialRoomDef
-from config.defaults import STUNDENTAFEL_GYMNASIUM_SEK1
+from config.nrw_g9 import STUNDENTAFEL_NRW_G9
 from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
 from models.school_class import SchoolClass
 from models.subject import (
@@ -56,6 +56,20 @@ _LEGACY_EXAMPLE = {
 _BLANK_CELL_MARKS = frozenset({"", "–", "-", "—", COUPLING_MARK.lower()})
 _DEFAULT_CLASS_LABELS = "abcdefghij"
 CURRICULUM_SHEET = "Stundentafel"
+# Blatt "Kopplungen": Spaltenköpfe (Reihenfolge wie coupling_row)
+COUPLING_HEADERS = (
+    "ID", "Typ (reli_ethik/wpf/band)",
+    "Beteiligte Klassen (kommagetrennt)",
+    "Gruppen (Name:Fach:Std[:Kürzel], kommagetrennt)",
+    "Stunden/Woche", "Klassenübergreifend", "Fach der Stundentafel",
+)
+_COUPLING_SHEET_WIDTHS = (14, 24, 34, 42, 14, 18, 22)
+COUPLING_HINT = (
+    f"{HINT_PREFIX}: 'Fach der Stundentafel' nur ausfüllen, wenn die "
+    f"Gruppen zusammen ein anders benanntes Fach der Stundentafel "
+    f"abdecken (z.B. Französisch und Latein für '2. Fremdsprache')."
+)
+_COUPLING_HINT_COLUMN = len(COUPLING_HEADERS) + 2
 _GRADE_NUMBER_RE = re.compile(r"\d+")
 # Jahrgang → Fach → Wochenstunden
 CurriculumTable = dict[int, dict[str, int]]
@@ -143,11 +157,12 @@ def _fuzzy_subject(name: str, known: list[str]) -> Optional[str]:
 
 
 def builtin_curriculum() -> CurriculumTable:
-    """Die eingebaute Stundentafel (nur Fächer mit Stunden)."""
+    """Die eingebaute Stundentafel: NRW G9, Beispielverteilung
+    (nur Fächer mit Stunden)."""
     return {
         grade: {subject: hours for subject, hours in table.items()
                 if hours > 0}
-        for grade, table in STUNDENTAFEL_GYMNASIUM_SEK1.items()
+        for grade, table in STUNDENTAFEL_NRW_G9.items()
     }
 
 
@@ -395,29 +410,32 @@ def generate_template(
 
     # ── Blatt 7: Kopplungen ───────────────────────────────────────────────────
     ws_kp = wb.create_sheet("Kopplungen")
-    kp_headers = [
-        "ID", "Typ (reli_ethik/wpf)", "Beteiligte Klassen (kommagetrennt)",
-        "Gruppen (Name:Fach:Std[:Kürzel], kommagetrennt)",
-        "Stunden/Woche", "Klassenübergreifend",
-    ]
-    for col, h in enumerate(kp_headers, 1):
+    for col, h in enumerate(COUPLING_HEADERS, 1):
         style_header(ws_kp.cell(row=1, column=col, value=h))
-    widths_kp = [14, 20, 34, 42, 14, 18]
-    for col, w in enumerate(widths_kp, 1):
+    for col, w in enumerate(_COUPLING_SHEET_WIDTHS, 1):
         set_col_width(ws_kp, col, w)
+    ws_kp.cell(
+        row=1, column=_COUPLING_HINT_COLUMN, value=COUPLING_HINT
+    ).font = Font(italic=True)
 
-    # Kopplungen laut Konfiguration (passend zu den "Kopplung"-Marken im
-    # Blatt Unterrichtsverteilung); Zeilen können angepasst werden.
+    # Kopplungen laut Konfiguration und Stundentafel (Reli/Ethik, WPF,
+    # Sprachen-Schiene), passend zu den "Kopplung"-Marken im Blatt
+    # Unterrichtsverteilung; Zeilen können angepasst werden.
     from data.fake_data import FakeDataGenerator
 
-    config_couplings = FakeDataGenerator(config).generate_couplings()
+    config_couplings = FakeDataGenerator(
+        config, curriculum=curriculum_table
+    ).generate_couplings()
     for r, coupling in enumerate(config_couplings, 2):
         for col, val in enumerate(coupling_row(coupling), 1):
             style_data(ws_kp.cell(row=r, column=col, value=val),
                        alt=(r % 2 == 0))
 
     # ── Blatt 8: Unterrichtsverteilung ────────────────────────────────────────
-    _write_assignment_sheet(wb, config, all_subjects, curriculum_table)
+    _write_assignment_sheet(
+        wb, config, all_subjects, curriculum_table,
+        coupling_subjects_by_class(config_couplings),
+    )
 
     # ── Speichern ─────────────────────────────────────────────────────────────
     path = Path(path)
@@ -440,6 +458,7 @@ def coupling_row(coupling: Coupling) -> list:
         ",".join(groups),
         coupling.hours_per_week,
         "ja" if coupling.cross_class else "nein",
+        coupling.curriculum_subject or "",
     ]
 
 
@@ -453,17 +472,6 @@ def _template_classes(config: SchoolConfig) -> list[tuple[str, int]]:
         classes.extend((f"{grade_def.grade}{label}", grade_def.grade)
                        for label in labels)
     return classes
-
-
-def _config_coupled_subjects(config: SchoolConfig, grade: int) -> set[str]:
-    """Fächer, die laut Konfiguration im Jahrgang über Kopplungen laufen."""
-    coupling_config = config.couplings
-    coupled: set[str] = set()
-    if coupling_config.reli_ethik_enabled:
-        coupled.update({"Religion", "Ethik"})
-    if coupling_config.wpf_enabled and grade >= coupling_config.wpf_start_grade:
-        coupled.add("WPF")
-    return coupled
 
 
 def _write_subject_sheet(workbook, subjects: list[Subject]) -> None:
@@ -508,14 +516,12 @@ def _write_subject_sheet(workbook, subjects: list[Subject]) -> None:
 
 
 def _assignment_cell_mark(
-    config: SchoolConfig, grade: int, subject: str,
-    curriculum: CurriculumTable,
+    hours: int, subject: str, coupled_subjects: set[str]
 ) -> Optional[str]:
     """Vorbelegung einer Matrix-Zelle; None = Zelle ist auszufüllen."""
-    hours = curriculum.get(grade, {}).get(subject, 0)
     if hours <= 0:
         return NOT_TAUGHT_MARK
-    if subject in _config_coupled_subjects(config, grade):
+    if subject in coupled_subjects:
         return COUPLING_MARK
     return None
 
@@ -525,8 +531,12 @@ def _write_assignment_sheet(
     config: SchoolConfig,
     subject_names: list[str],
     curriculum: CurriculumTable,
+    coupled_by_class: dict[str, set[str]],
 ) -> None:
-    """Matrix Klasse × Fach für die vorgegebene Unterrichtsverteilung."""
+    """Matrix Klasse × Fach für die vorgegebene Unterrichtsverteilung.
+
+    `coupled_by_class`: Klasse → Fächer, die über eine Kopplung laufen.
+    """
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
@@ -557,7 +567,8 @@ def _write_assignment_sheet(
         class_cell.font, class_cell.border = Font(bold=True), border
         for column, subject in enumerate(subjects, 2):
             mark = _assignment_cell_mark(
-                config, grade, subject, curriculum
+                curriculum.get(grade, {}).get(subject, 0), subject,
+                coupled_by_class.get(class_id, set()),
             )
             cell = sheet.cell(row=row, column=column, value=mark)
             cell.alignment, cell.border = center, border
@@ -1084,6 +1095,15 @@ class ExcelImporter:
 
     # ── Kopplungen ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _coupling_type(row: dict) -> str:
+        """Typ der Kopplung; der Spaltenkopf beginnt mit 'Typ' (ältere
+        Vorlagen: 'Typ (reli_ethik/wpf)')."""
+        for header, value in row.items():
+            if header.startswith("typ"):
+                return value.strip().lower()
+        return ""
+
     def import_couplings(self) -> list[Coupling]:
         sheet = self._get_sheet("Kopplungen")
         if sheet is None:
@@ -1094,7 +1114,7 @@ class ExcelImporter:
 
         for i, row in enumerate(rows, 2):
             cid = row.get("id", "").strip()
-            ctype = row.get("typ (reli_ethik/wpf)", row.get("typ", "")).strip().lower()
+            ctype = self._coupling_type(row)
             classes_raw = row.get("beteiligte klassen (kommagetrennt)",
                                   row.get("klassen", "")).strip()
             groups_raw = row.get(
@@ -1107,6 +1127,10 @@ class ExcelImporter:
 
             if not cid or cid.startswith("id"):
                 continue  # Header/Beispiel
+            curriculum_subject = self._parse_subject(
+                row.get("fach der stundentafel", ""),
+                f"Kopplungen Zeile {i} ('{cid}'), Fach der Stundentafel",
+            )
 
             class_ids = [c.strip() for c in classes_raw.split(",") if c.strip()]
 
@@ -1147,6 +1171,7 @@ class ExcelImporter:
                 groups=groups,
                 hours_per_week=hours,
                 cross_class=cross,
+                curriculum_subject=curriculum_subject,
             ))
 
         return couplings

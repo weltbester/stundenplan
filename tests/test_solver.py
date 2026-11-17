@@ -7,7 +7,7 @@ from config.schema import (
     SchoolConfig, GradeConfig, GradeDefinition, SchoolType,
     TeacherConfig, SolverConfig,
 )
-from config.defaults import default_time_grid, default_rooms, default_school_config, SUBJECT_METADATA, STUNDENTAFEL_GYMNASIUM_SEK1
+from config.defaults import default_time_grid, default_rooms, default_school_config, SUBJECT_METADATA, STUNDENTAFEL_LEGACY
 from data.fake_data import FakeDataGenerator
 from models.school_data import SchoolData
 from models.subject import Subject
@@ -88,12 +88,12 @@ def make_mini_school_data(seed: int = 42) -> SchoolData:
     classes = [
         SchoolClass(
             id="5a", grade=5, label="a",
-            curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[5].items() if h > 0},
+            curriculum={s: h for s, h in STUNDENTAFEL_LEGACY[5].items() if h > 0},
             max_slot=sek1_max,
         ),
         SchoolClass(
             id="7a", grade=7, label="a",
-            curriculum={s: h for s, h in STUNDENTAFEL_GYMNASIUM_SEK1[7].items() if h > 0},
+            curriculum={s: h for s, h in STUNDENTAFEL_LEGACY[7].items() if h > 0},
             max_slot=sek1_max,
         ),
     ]

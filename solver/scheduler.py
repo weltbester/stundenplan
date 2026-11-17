@@ -329,12 +329,11 @@ class ScheduleSolver:
             self._coupling_covered[cls.id] = set()
 
         for coupling in self.data.couplings:
+            covered = coupling.curriculum_subjects()
             for class_id in coupling.involved_class_ids:
-                if coupling.coupling_type == "wpf":
-                    self._coupling_covered.setdefault(class_id, set()).add("WPF")
-                elif coupling.coupling_type == "reli_ethik":
-                    for group in coupling.groups:
-                        self._coupling_covered.setdefault(class_id, set()).add(group.subject)
+                self._coupling_covered.setdefault(
+                    class_id, set()
+                ).update(covered)
 
     # ─── Variablen erstellen ──────────────────────────────────────────────────
 
@@ -503,7 +502,8 @@ class ScheduleSolver:
         self._c13_pin_constraints()
         self._gap_vars = self._build_gap_vars()   # einmalig, für C14 + Soft
         self._c14_gap_limit()
-        self._c15_subject_day_limit()
+        if self.config.solver.subject_day_limit:
+            self._c15_subject_day_limit()
 
     def _c1_slot_implies_assign(self) -> None:
         """slot[t,c,s,d,h] <= assign[t,c,s]"""
@@ -1153,11 +1153,7 @@ class ScheduleSolver:
         # Kopplungs-abgedeckte Fächer bestimmen (diese brauchen keinen direkten Lehrer)
         coupling_covered: set[str] = set()
         for coupling in self.data.couplings:
-            if coupling.coupling_type == "wpf":
-                coupling_covered.add("WPF")
-            elif coupling.coupling_type == "reli_ethik":
-                for group in coupling.groups:
-                    coupling_covered.add(group.subject)
+            coupling_covered.update(coupling.curriculum_subjects())
 
         # Pro Fach: Lehrer-Kapazität vs. Bedarf (nur nicht-Kopplungs-Fächer)
         subject_need: dict[str, int] = {}

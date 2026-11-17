@@ -6,6 +6,7 @@ from typing import Optional
 import openpyxl
 import pytest
 
+from config.defaults import STUNDENTAFEL_LEGACY
 from data.excel_import import (
     ASSIGNMENT_SHEET, COUPLING_MARK, HINT_PREFIX, NOT_TAUGHT_MARK,
     ExcelImportError, generate_template, import_from_excel,
@@ -46,8 +47,14 @@ def _matching(messages: list[str], fragment: str) -> list[str]:
 
 
 def _write_mini_workbook(path: Path) -> None:
-    """Vorlage für 5a + 7a mit den zehn Mini-Lehrkräften."""
-    generate_template(make_mini_config(), path)
+    """Vorlage für 5a + 7a mit den zehn Mini-Lehrkräften.
+
+    Mit der alten Stundentafel: auf sie sind die Mini-Lehrkräfte
+    abgestimmt. Die eingebaute NRW-Tafel prüft tests/test_nrw_g9.py.
+    """
+    generate_template(
+        make_mini_config(), path, curriculum=STUNDENTAFEL_LEGACY
+    )
     workbook = openpyxl.load_workbook(path)
     sheet = workbook[TEACHER_SHEET]
     teachers = make_mini_school_data().teachers

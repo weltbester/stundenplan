@@ -268,6 +268,12 @@ class CouplingConfig(BaseModel):
     # Ob WPF klassenübergreifend stattfindet
     wpf_cross_class: bool = Field(True,
         description="WPF klassenübergreifend")
+    # Sprachen der Schiene für die zweite Fremdsprache. Eine Schiene
+    # entsteht für jeden Jahrgang, dessen Stundentafel das Fach
+    # "2. Fremdsprache" enthält; leere Liste = keine Schiene.
+    second_language_subjects: list[str] = Field(
+        default=["Französisch", "Latein"],
+        description="Sprachen der Schiene für die 2. Fremdsprache")
 
 
 # ─── SOLVER ───
@@ -312,6 +318,13 @@ class SolverConfig(BaseModel):
     # Wer einen schulinternen Richtwert durchsetzen möchte, kann z. B. 14 oder 20 setzen.
     max_gaps_per_week: int = Field(0, ge=0,
         description="Max. Springstunden pro Lehrer/Woche (0=kein Limit, nur Soft-Minimierung)")
+    # Harte Regel C15: pro Klasse, Fach und Tag höchstens eine Stunde oder
+    # ein Doppelstunden-Block. Kein Bundesland schreibt sie vor; sie ist
+    # übliche Praxis. Ausgeschaltet verteilt nichts mehr ein Fach über die
+    # Woche (drei Stunden desselben Fachs an einem Tag sind dann möglich).
+    subject_day_limit: bool = Field(
+        True,
+        description="Pro Fach und Tag max. 1 Stunde oder 1 Doppelblock")
 
 
 # ─── GESAMT-CONFIG ───

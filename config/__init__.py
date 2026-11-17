@@ -18,9 +18,10 @@ from config.defaults import (
     default_time_grid,
     default_grades,
     default_rooms,
-    STUNDENTAFEL_GYMNASIUM_SEK1,
+    STUNDENTAFEL_LEGACY,
     SUBJECT_METADATA,
 )
+from config.nrw_g9 import STUNDENTAFEL_NRW_G9
 from config.manager import ConfigManager
 
 __all__ = [
@@ -41,7 +42,8 @@ __all__ = [
     "default_time_grid",
     "default_grades",
     "default_rooms",
-    "STUNDENTAFEL_GYMNASIUM_SEK1",
+    "STUNDENTAFEL_LEGACY",
+    "STUNDENTAFEL_NRW_G9",
     "SUBJECT_METADATA",
     "ConfigManager",
 ]

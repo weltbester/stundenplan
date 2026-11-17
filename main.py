@@ -46,10 +46,10 @@ try:
     rc = click.rich_click
 
     # ── Grundeinstellungen ────────────────────────────────────────────────────
-    rc.USE_RICH_MARKUP       = True
-    rc.USE_MARKDOWN          = False
+    # Rich-Markup in Hilfetexten; die Metavar-Spalte ist seit
+    # rich-click 1.9 Standard.
+    rc.TEXT_MARKUP           = "rich"
     rc.SHOW_ARGUMENTS        = True
-    rc.SHOW_METAVARS_COLUMN  = True
     rc.MAX_WIDTH             = 100
     rc.COLOR_SYSTEM          = "truecolor"
 

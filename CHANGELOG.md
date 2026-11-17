@@ -103,6 +103,10 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Blatt "Fächer" (bisher eine feste Liste der ersten 20 Fächer).
 - `.gitignore`: echte Personaldaten (`lehrer.txt`, `lehrer.xlsx`),
   die fremde venv `.macpro/` und `.DS_Store` werden ignoriert.
+- Hilfe-Ausgabe: `main.py` nutzt die aktuellen rich-click-Einstellungen
+  (`TEXT_MARKUP` statt `USE_RICH_MARKUP`/`USE_MARKDOWN`, Metavar-Spalte
+  als Standard); die drei Abkündigungs-Warnungen entfallen, die Ausgabe
+  ist unverändert. Mindestversion jetzt rich-click 1.9.
 
 ### Fixed
 - Excel-Import: Das Blatt "Stundentafel" wird jetzt eingelesen; bisher

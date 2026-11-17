@@ -37,6 +37,7 @@ from data.fake_data import (
     FIRST_NAMES_F, FIRST_NAMES_M, LAST_NAMES, CurriculumTable,
     FakeDataGenerator,
 )
+from models.attendance_check import attendance_by_slot
 from models.coupling import (
     COUPLING_TYPE_BAND, COUPLING_TYPE_RELI_ETHIK, COUPLING_TYPE_WPF,
     WPF_CURRICULUM_SUBJECT, Coupling,
@@ -46,9 +47,6 @@ from models.school_class import SchoolClass
 from models.school_data import SchoolData
 from models.subject import default_subjects
 from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
-from solver.distribution import (
-    lessons_every_day, sek1_slot_numbers, weekly_lessons,
-)
 
 SUPPORT_SUBJECT = "Ergänzungsstunde"
 # Lehrkräfte dieser Fächer übernehmen auch die Ergänzungsstunden.
@@ -446,28 +444,6 @@ def make_abbreviation(last_name: str, used: set[str]) -> str:
             used.add(candidate)
             return candidate
     raise ValueError(f"Kein freies Kürzel für '{last_name}'.")
-
-
-def attendance_by_slot(
-    classes: list[SchoolClass],
-    couplings: list[Coupling],
-    time_grid: TimeGridConfig,
-) -> dict[int, int]:
-    """Stunde → Zahl der Klassen, die an JEDEM Tag in ihr Unterricht haben.
-
-    Ein Klassentag beginnt ohne Lücke in der ersten Stunde (C10). Eine
-    Klasse mit k Pflichtstunden je Tag (`lessons_every_day`) belegt
-    daher an jedem Tag die ersten k Stunden.
-    """
-    slots = sek1_slot_numbers(time_grid)
-    every_day = [
-        lessons_every_day(weekly, time_grid.days_per_week, len(slots))
-        for weekly in weekly_lessons(classes, couplings).values()
-    ]
-    return {
-        slot: sum(1 for needed in every_day if needed > position)
-        for position, slot in enumerate(slots)
-    }
 
 
 class AttendanceGuard:

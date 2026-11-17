@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from models.attendance_check import check_attendance
 from models.subject import Subject
 from models.deputat_check import (
     PERCENT, check_target_balance, target_margin, teacher_lessons_needed,
@@ -124,6 +125,7 @@ class SchoolData(BaseModel):
         7. Alle verwendeten Fächer stehen in der Fächerliste
         8. Soll-Deputate passen zum Unterrichtsbedarf (Warnung)
         9. Wochenstunden je Jahrgang im Rahmen des Landes (Warnung)
+        10. Freie Lehrkräfte in den Stunden, die jede Klasse täglich hat
         """
         errors: list[str] = []
         warnings: list[str] = []
@@ -330,6 +332,12 @@ class SchoolData(BaseModel):
 
         # ── 9. Wochenstundenrahmen des Landes ────────────────────────────
         warnings.extend(check_weekly_frame(self.classes, self.config))
+
+        # ── 10. Freie Lehrkräfte für die Pflichtstunden jedes Tages ──────
+        errors.extend(check_attendance(
+            self.classes, self.teachers, self.couplings,
+            self.fixed_assignments, tg,
+        ))
 
         return FeasibilityReport(
             is_feasible=len(errors) == 0,

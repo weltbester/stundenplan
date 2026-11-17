@@ -129,8 +129,8 @@ Klasse an jedem Tag hat, genug Lehrkräfte frei: mindestens Zahl dieser
 Klassen × 1,15 (`attendance_reserve`). Weil ein Klassentag ohne Lücke
 in der 1. Stunde beginnt, hat eine Klasse mit 30 Wochenstunden täglich
 die Stunden 1–2, eine mit 32 die Stunden 1–4. Sind dort weniger
-Lehrkräfte frei als Klassen, gibt es keinen Plan, und der Solver kann
-das nicht nachweisen: er sucht ohne Ergebnis bis zum Zeitlimit.
+Lehrkräfte frei als Klassen, gibt es keinen Plan (der Machbarkeits-Check
+meldet das, siehe "Eingebaute Stundentafel").
 
 ### Solver
 
@@ -423,6 +423,20 @@ Landes. Bitte die Zahlen der eigenen Schule eintragen.
 Der Machbarkeits-Check warnt, wenn ein Jahrgang den Wochenstundenrahmen
 verlässt (NRW G9: 28–30 Stunden in Kl. 5–6, 30–33 in Kl. 7–10). Geprüft
 wird nur bei `bundesland: NRW` und Schulform Gymnasium.
+
+Er meldet außerdem einen **Fehler**, wenn in einer Stunde nicht genug
+Lehrkräfte frei sind. Ein Klassentag beginnt ohne Lücke in der
+1. Stunde; eine Klasse mit 30 Wochenstunden hat daher an jedem Tag die
+Stunden 1–2, eine mit 32 die Stunden 1–4. Kann in einer solchen Stunde
+nicht jede dieser Klassen gleichzeitig eine eigene freie Lehrkraft
+bekommen (aus ihrer Unterrichtsverteilung, ohne Verteilung jede
+Lehrkraft mit einem ihrer Fächer, oder über eine ihrer Kopplungen),
+gibt es keinen Plan. Beispiel: `Mo 1. Stunde: 18 Klassen (…) haben an
+jedem Tag in dieser Stunde Unterricht …, aber nur 17 der dafür
+möglichen Lehrkräfte sind frei (…)`. Ohne diese Prüfung sucht der
+Solver bis zum Zeitlimit ohne Ergebnis, weil er so einen Engpass nicht
+als unlösbar erkennen kann. Abhilfe: Sperrzeiten in dieser Stunde
+lockern oder die Unterrichtsverteilung ändern.
 
 Die Testdaten im Profil `loose` (Standard von `main.py generate`)
 nutzen die ältere Beispiel-Tafel (28, 31, 32, 32, 34, 34 Stunden), auf

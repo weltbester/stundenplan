@@ -6,6 +6,12 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 ## [Unreleased]
 
 ### Added
+- Machbarkeits-Check: Fehler, wenn in einer Stunde, die jede Klasse an
+  jedem Tag hat (der Tag beginnt ohne Lücke in der 1. Stunde), nicht
+  jede dieser Klassen gleichzeitig eine eigene freie Lehrkraft
+  bekommen kann. Die Meldung nennt Tag, Stunde, Klassen und die freien
+  Lehrkräfte. Bisher suchte der Solver in diesem Fall bis zum
+  Zeitlimit ohne Ergebnis (`models/attendance_check.py`).
 - `show` zeigt Raumpläne für Sonderräume und Klassenräume
   (z.B. `show PH1`, `show 101`).
 - `CHANGELOG.md`.

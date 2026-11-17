@@ -26,11 +26,13 @@ from ortools.sat.python import cp_model
 from pydantic import BaseModel
 
 from config.schema import TimeGridConfig
+from models.attendance_check import (
+    lessons_every_day, sek1_slot_numbers, weekly_lessons,
+)
 from models.coupling import Coupling
 from models.fixed_assignment import (
     FixedAssignment, coupling_subjects_by_class,
 )
-from models.school_class import SchoolClass
 from models.school_data import SchoolData
 from models.teacher import (
     HALF_LESSONS_PER_LESSON, Teacher, format_hours_delta,
@@ -115,16 +117,6 @@ def timetable_time_limit(total_seconds: float, used_seconds: float) -> int:
     return max(MIN_TIMETABLE_SECONDS, round(total_seconds - used_seconds))
 
 
-def sek1_slot_numbers(time_grid: TimeGridConfig) -> list[int]:
-    """Stunden des Sek-I-Rasters, aufsteigend (wie im Stundenplan-Solver)."""
-    return sorted(
-        slot.slot_number
-        for slot in time_grid.lesson_slots
-        if not slot.is_sek2_only
-        and slot.slot_number <= time_grid.sek1_max_slot
-    )
-
-
 def double_block_pairs(time_grid: TimeGridConfig) -> list[Slot]:
     """Doppelblöcke (erste, zweite Stunde), die ganz im Sek-I-Raster liegen."""
     slot_numbers = set(sek1_slot_numbers(time_grid))
@@ -138,44 +130,6 @@ def double_block_pairs(time_grid: TimeGridConfig) -> list[Slot]:
 def weekly_class_lessons(data: SchoolData) -> dict[str, int]:
     """Klasse → Wochenstunden, die der Stundenplan für sie einplant."""
     return weekly_lessons(data.classes, data.couplings)
-
-
-def weekly_lessons(
-    classes: list[SchoolClass], couplings: list[Coupling]
-) -> dict[str, int]:
-    """Klasse → Wochenstunden, die der Stundenplan für sie einplant.
-
-    Fächer außerhalb von Kopplungen laut Stundentafel, dazu die
-    Stunden jeder Kopplung, an der die Klasse beteiligt ist.
-    """
-    covered = coupling_subjects_by_class(couplings)
-    lessons = {
-        school_class.id: sum(
-            hours
-            for subject, hours in school_class.curriculum.items()
-            if hours > 0
-            and subject not in covered.get(school_class.id, set())
-        )
-        for school_class in classes
-    }
-    for coupling in couplings:
-        for class_id in coupling.involved_class_ids:
-            if class_id in lessons:
-                lessons[class_id] += coupling.hours_per_week
-    return lessons
-
-
-def lessons_every_day(
-    weekly_lessons: int, days: int, slots_per_day: int
-) -> int:
-    """Wie viele Stunden ab der ersten eine Klasse an JEDEM Tag hat.
-
-    Ein Tag hat höchstens `slots_per_day` Stunden und beginnt ohne Lücke
-    in der ersten (C10). Die übrigen Tage nehmen zusammen höchstens
-    `(days - 1) * slots_per_day` Stunden auf; der Rest fällt auf den
-    kürzesten Tag. 0 heißt: ein freier Tag wäre möglich.
-    """
-    return max(0, weekly_lessons - (days - 1) * slots_per_day)
 
 
 def forced_by_pins(

@@ -30,6 +30,7 @@ from models.coupling import Coupling
 from models.fixed_assignment import (
     FixedAssignment, coupling_subjects_by_class,
 )
+from models.school_class import SchoolClass
 from models.school_data import SchoolData
 from models.teacher import (
     HALF_LESSONS_PER_LESSON, Teacher, format_hours_delta,
@@ -135,12 +136,19 @@ def double_block_pairs(time_grid: TimeGridConfig) -> list[Slot]:
 
 
 def weekly_class_lessons(data: SchoolData) -> dict[str, int]:
+    """Klasse → Wochenstunden, die der Stundenplan für sie einplant."""
+    return weekly_lessons(data.classes, data.couplings)
+
+
+def weekly_lessons(
+    classes: list[SchoolClass], couplings: list[Coupling]
+) -> dict[str, int]:
     """Klasse → Wochenstunden, die der Stundenplan für sie einplant.
 
     Fächer außerhalb von Kopplungen laut Stundentafel, dazu die
     Stunden jeder Kopplung, an der die Klasse beteiligt ist.
     """
-    covered = coupling_subjects_by_class(data.couplings)
+    covered = coupling_subjects_by_class(couplings)
     lessons = {
         school_class.id: sum(
             hours
@@ -148,9 +156,9 @@ def weekly_class_lessons(data: SchoolData) -> dict[str, int]:
             if hours > 0
             and subject not in covered.get(school_class.id, set())
         )
-        for school_class in data.classes
+        for school_class in classes
     }
-    for coupling in data.couplings:
+    for coupling in couplings:
         for class_id in coupling.involved_class_ids:
             if class_id in lessons:
                 lessons[class_id] += coupling.hours_per_week

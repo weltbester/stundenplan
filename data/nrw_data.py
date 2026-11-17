@@ -18,14 +18,18 @@ Unterschiede zum bisherigen Generator (data/fake_data.py):
 - Teilzeitkräfte haben einen freien Tag oder gesperrte Randstunden.
 """
 
+import math
 import random
+from collections import Counter
 from typing import Optional
 
 from pydantic import BaseModel
 
 from config.defaults import SECOND_LANGUAGE_SUBJECT
 from config.nrw_g9 import STUNDENTAFEL_NRW_G9
-from config.schema import GradeConfig, SchoolConfig, SchoolType
+from config.schema import (
+    GradeConfig, SchoolConfig, SchoolType, TimeGridConfig,
+)
 from data.coupling_builder import (
     RELIGION_SUBJECT, parallel_coupling, reli_group_subject,
 )
@@ -42,6 +46,9 @@ from models.school_class import SchoolClass
 from models.school_data import SchoolData
 from models.subject import default_subjects
 from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
+from solver.distribution import (
+    lessons_every_day, sek1_slot_numbers, weekly_lessons,
+)
 
 SUPPORT_SUBJECT = "Ergänzungsstunde"
 # Lehrkräfte dieser Fächer übernehmen auch die Ergänzungsstunden.
@@ -122,6 +129,9 @@ class NrwProfile(BaseModel):
     # Zahl der Oberstufen-Schienen im Sek-I-Raster (je eine Doppelstunde
     # an einem Tag); nur dort liegen die Sek-II-Sperren.
     sek2_band_count: int = 8
+    # In jeder Stunde, in der jede Klasse Unterricht haben muss, bleiben
+    # mindestens so viele Lehrkräfte frei: Klassen mal (1 + Reserve).
+    attendance_reserve: float = 0.15
     # Teilzeit: ganzer freier Tag; sonst gesperrte Randstunden
     free_day_probability: float = 0.5
     edge_block_probability: float = 0.3
@@ -438,6 +448,67 @@ def make_abbreviation(last_name: str, used: set[str]) -> str:
     raise ValueError(f"Kein freies Kürzel für '{last_name}'.")
 
 
+def attendance_by_slot(
+    classes: list[SchoolClass],
+    couplings: list[Coupling],
+    time_grid: TimeGridConfig,
+) -> dict[int, int]:
+    """Stunde → Zahl der Klassen, die an JEDEM Tag in ihr Unterricht haben.
+
+    Ein Klassentag beginnt ohne Lücke in der ersten Stunde (C10). Eine
+    Klasse mit k Pflichtstunden je Tag (`lessons_every_day`) belegt
+    daher an jedem Tag die ersten k Stunden.
+    """
+    slots = sek1_slot_numbers(time_grid)
+    every_day = [
+        lessons_every_day(weekly, time_grid.days_per_week, len(slots))
+        for weekly in weekly_lessons(classes, couplings).values()
+    ]
+    return {
+        slot: sum(1 for needed in every_day if needed > position)
+        for position, slot in enumerate(slots)
+    }
+
+
+class AttendanceGuard:
+    """Hält in jeder Stunde genug Lehrkräfte für die Klassen frei.
+
+    Sind in einer Stunde, in der jede Klasse Unterricht haben muss,
+    weniger Lehrkräfte frei als Klassen, gibt es keinen Plan. Der Solver
+    kann das (Schubfachprinzip) nicht beweisen und sucht bis zum
+    Zeitlimit. Der Wächter lässt eine Sperre nur zu, solange in jeder
+    ihrer Stunden mindestens Klassen × (1 + Reserve) Lehrkräfte frei
+    bleiben.
+    """
+
+    def __init__(
+        self,
+        attendance: dict[int, int],
+        days: int,
+        teacher_count: int,
+        reserve: float,
+    ) -> None:
+        self._max_blocked: dict[tuple[int, int], int] = {
+            (day, slot): teacher_count - math.ceil(needed * (1 + reserve))
+            for day in range(days)
+            for slot, needed in attendance.items()
+            if needed > 0
+        }
+        self._blocked: Counter[tuple[int, int]] = Counter()
+
+    def allows(self, unit: set[tuple[int, int]]) -> bool:
+        """Darf eine weitere Lehrkraft in allen Stunden von `unit` fehlen?"""
+        return all(
+            self._blocked[slot] < self._max_blocked[slot]
+            for slot in unit
+            if slot in self._max_blocked
+        )
+
+    def record(self, blocked: set[tuple[int, int]]) -> None:
+        """Merkt sich die Sperrzeiten einer fertigen Lehrkraft."""
+        self._blocked.update(blocked)
+
+
 class NrwDataGenerator:
     """Erzeugt den Datensatz des Profils "nrw-g9"."""
 
@@ -471,7 +542,14 @@ class NrwDataGenerator:
              teachers_config.teilzeit_deputat_max),
             self._rng,
         )
-        teachers = [self._teacher(post) for post in planner.plan()]
+        posts = planner.plan()
+        guard = AttendanceGuard(
+            attendance_by_slot(classes, couplings, self.config.time_grid),
+            self.config.time_grid.days_per_week,
+            len(posts),
+            self.profile.attendance_reserve,
+        )
+        teachers = [self._teacher(post, guard) for post in posts]
         return SchoolData(
             subjects=default_subjects(),
             rooms=base.generate_rooms(),
@@ -491,7 +569,7 @@ class NrwDataGenerator:
             ),
         })
 
-    def _teacher(self, post: StaffPost) -> Teacher:
+    def _teacher(self, post: StaffPost, guard: AttendanceGuard) -> Teacher:
         """Lehrkraft zu einer Stelle: Name, Fächer, Grenzen, Sperrzeiten."""
         rng = self._rng
         first_names = (
@@ -513,7 +591,7 @@ class NrwDataGenerator:
             deputat_min=lower,
             deputat_soll=post.sek1_hours,
             is_teilzeit=post.is_part_time,
-            unavailable_slots=self._blocked_slots(post, upper),
+            unavailable_slots=self._blocked_slots(post, upper, guard),
             preferred_free_days=wishes,
             max_hours_per_day=settings.max_hours_per_day,
             max_gaps_per_day=settings.max_gaps_per_day,
@@ -531,17 +609,20 @@ class NrwDataGenerator:
     # ─── Sperrzeiten ──────────────────────────────────────────────────────
 
     def _blocked_slots(
-        self, post: StaffPost, upper_bound: int
+        self, post: StaffPost, upper_bound: int, guard: AttendanceGuard
     ) -> list[tuple[int, int]]:
         """Sperrzeiten: Teilzeit-Regelung und Stunden in der Sek II.
 
         Eine Sperre entfällt, wenn danach weniger als die Obergrenze plus
-        RESERVE_HOURS unterrichtbar wäre.
+        RESERVE_HOURS unterrichtbar wäre oder wenn `guard` sie nicht
+        zulässt (zu wenige freie Lehrkräfte für die Klassen).
         """
         blocked: set[tuple[int, int]] = set()
         if post.is_part_time:
             wanted = self._part_time_block()
-            if self._teachable(blocked | wanted) >= upper_bound + RESERVE_HOURS:
+            teachable = self._teachable(blocked | wanted)
+            if (teachable >= upper_bound + RESERVE_HOURS
+                    and guard.allows(wanted)):
                 blocked |= wanted
 
         sek2_hours = post.total_hours - post.sek1_hours
@@ -553,9 +634,11 @@ class NrwDataGenerator:
                 break
             fits = len(unit) <= open_count and blocked.isdisjoint(unit)
             teachable = self._teachable(blocked | unit)
-            if fits and teachable >= upper_bound + RESERVE_HOURS:
+            if (fits and teachable >= upper_bound + RESERVE_HOURS
+                    and guard.allows(unit)):
                 blocked |= unit
                 open_count -= len(unit)
+        guard.record(blocked)
         return sorted(blocked)
 
     def _slot_numbers(self) -> list[int]:

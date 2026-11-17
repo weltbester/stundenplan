@@ -18,9 +18,9 @@ from data.generators import (
 )
 from data.nrw_data import (
     MAX_SUBJECTS, MIN_SHARE_HOURS, RESERVE_HOURS, SPARE_TEACHERS,
-    SUPPORT_SUBJECT, NrwDataGenerator, NrwProfile, StaffPlanner,
-    make_abbreviation, nrw_couplings, parallel_group_counts, round_half,
-    teaching_demand,
+    SUPPORT_SUBJECT, AttendanceGuard, NrwDataGenerator, NrwProfile,
+    StaffPlanner, attendance_by_slot, make_abbreviation, nrw_couplings,
+    parallel_group_counts, round_half, teaching_demand,
 )
 from models.coupling import (
     COUPLING_TYPE_BAND, COUPLING_TYPE_RELI_ETHIK, COUPLING_TYPE_WPF,
@@ -37,6 +37,9 @@ MARGIN_RANGE = (0.03, 0.05)
 PART_TIME_RANGE = (0.10, 0.50)
 FULL_TIME_HOURS = 25.5
 DISTRIBUTION_SECONDS = 20
+# Seeds, die vor dem Wächter montags in Stunde 1 nur 17 freie
+# Lehrkräfte für 18 Klassen hatten (Benchmark nrw-18).
+SHORT_MORNING_SEEDS = (44, 46)
 
 
 def _config(parallel_classes: int) -> SchoolConfig:
@@ -321,6 +324,11 @@ class TestGeneratedData:
         ]
         assert all(not t.unavailable_slots for t in full_sek1)
 
+    def test_enough_teachers_stay_free_for_the_classes(
+        self, data: SchoolData
+    ):
+        assert _short_slots(data) == []
+
     def test_config_follows_the_profile(self, data: SchoolData):
         profile = NrwProfile()
         settings = data.config.teachers
@@ -376,6 +384,69 @@ class TestHelpers:
         assert first[0] == "MUE"
         again = [make_abbreviation("Müller", set()) for _ in range(1)]
         assert again == ["MUE"]
+
+
+def _short_slots(data: SchoolData) -> list[tuple[int, int, int, int]]:
+    """(Tag, Stunde, frei, verlangt) für Stunden mit zu wenigen
+    freien Lehrkräften."""
+    grid = data.config.time_grid
+    attendance = attendance_by_slot(data.classes, data.couplings, grid)
+    reserve = NrwProfile().attendance_reserve
+    short = []
+    for day in range(grid.days_per_week):
+        for slot, needed in attendance.items():
+            free = sum(
+                (day, slot) not in teacher.unavailable_slots
+                for teacher in data.teachers
+            )
+            wanted = math.ceil(needed * (1 + reserve))
+            if needed and free < wanted:
+                short.append((day, slot, free, wanted))
+    return short
+
+
+class TestAttendance:
+    """Genug freie Lehrkräfte in den Stunden, die jede Klasse hat."""
+
+    TEACHERS = 13
+    CLASSES = 10
+    RESERVE = 0.15
+
+    def _guard(self) -> AttendanceGuard:
+        # Verlangt: ceil(10 × 1,15) = 12 frei → höchstens 1 gesperrt.
+        return AttendanceGuard(
+            {1: self.CLASSES, 2: 0}, 1, self.TEACHERS, self.RESERVE
+        )
+
+    def test_short_days_need_fewer_morning_lessons(self):
+        data = _generate(seed=1)
+        attendance = attendance_by_slot(
+            data.classes, data.couplings, data.config.time_grid
+        )
+        # 30 Wochenstunden (5–6): täglich Stunde 1–2; 32 (7–10): 1–4.
+        lower = 2 * PARALLEL_CLASSES
+        upper = 4 * PARALLEL_CLASSES
+        assert attendance == {
+            1: lower + upper, 2: lower + upper, 3: upper, 4: upper,
+            5: 0, 6: 0, 7: 0,
+        }
+
+    def test_guard_stops_at_the_limit(self):
+        guard = self._guard()
+        assert guard.allows({(0, 1)})
+        guard.record({(0, 1)})
+        assert not guard.allows({(0, 1)})
+        assert not guard.allows({(0, 1), (0, 2)})
+
+    def test_guard_ignores_free_lessons(self):
+        guard = self._guard()
+        guard.record({(0, 2), (0, 5)})
+        guard.record({(0, 2), (0, 5)})
+        assert guard.allows({(0, 2), (0, 5)})
+
+    @pytest.mark.parametrize("seed", SHORT_MORNING_SEEDS)
+    def test_former_short_mornings_are_fixed(self, seed: int):
+        assert _short_slots(_generate(seed)) == []
 
 
 # ─── Profile und CLI ──────────────────────────────────────────────────────────

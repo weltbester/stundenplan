@@ -204,6 +204,12 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   für `main.py solve` und den Benchmark gleich.
 
 ### Fixed
+- Testdaten-Profil `nrw-g9`: Sperrzeiten lassen in jeder Stunde, die
+  jede Klasse täglich hat, mindestens Klassen × 1,15 Lehrkräfte frei.
+  Bei 3 Klassen je Jahrgang waren montags in der 1. Stunde teils nur
+  17 Lehrkräfte für 18 Klassen frei; der Solver fand keinen Plan und
+  konnte das nicht als unlösbar erkennen (Benchmark nrw-18, Seeds 44
+  und 46).
 - Einrichtungs-Assistent: Gewicht Springstunden zeigte und schlug 100
   vor, "Standard-Gewichte übernehmen" setzte aber 200. Jetzt überall
   200 (Standard, auf `weight_deputat_deviation` abgestimmt).

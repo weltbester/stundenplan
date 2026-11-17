@@ -124,6 +124,14 @@ Zusammenfassung zeigt den Unterrichtsbedarf in Lehrerstunden und die
 Kapazitätsreserve. Die Stellschrauben (Sek-II-Anteile, Reserve,
 Teilzeit) stehen in `NrwProfile` in `data/nrw_data.py`.
 
+Sperrzeiten (Sek II und Teilzeit) lassen in jeder Stunde, die jede
+Klasse an jedem Tag hat, genug Lehrkräfte frei: mindestens Zahl dieser
+Klassen × 1,15 (`attendance_reserve`). Weil ein Klassentag ohne Lücke
+in der 1. Stunde beginnt, hat eine Klasse mit 30 Wochenstunden täglich
+die Stunden 1–2, eine mit 32 die Stunden 1–4. Sind dort weniger
+Lehrkräfte frei als Klassen, gibt es keinen Plan, und der Solver kann
+das nicht nachweisen: er sucht ohne Ergebnis bis zum Zeitlimit.
+
 ### Solver
 
 ```bash

@@ -18,8 +18,9 @@ COLUMNS: tuple[tuple[str, Formatter], ...] = (
     ("Status", lambda r: r.status),
     ("Variablen", lambda r: r.num_variables),
     ("Constraints", lambda r: r.num_constraints),
+    ("Stufe 1 s", lambda r: r.distribution_seconds),
     ("Aufbau s", lambda r: r.build_seconds),
-    ("Erste Lösung s", lambda r: r.warmstart_seconds),
+    ("Erster Plan s", lambda r: r.first_plan_seconds),
     ("Gesamt s", lambda r: r.total_seconds),
     ("Zielwert", lambda r: r.objective),
     ("Spätgewinn %", lambda r: r.late_gain_percent),
@@ -46,11 +47,11 @@ def _median_or_none(values: list[Optional[float]]) -> Optional[float]:
 def summarize(results: list[RunResult]) -> str:
     """Einzeilige Zusammenfassung über alle Läufe."""
     solved = [r for r in results if r.is_solved]
-    first = _median_or_none([r.warmstart_seconds for r in solved])
+    first = _median_or_none([r.first_plan_seconds for r in solved])
     late = _median_or_none([r.late_gain_percent for r in solved])
     return (
         f"Gelöst: {len(solved)}/{len(results)} | "
-        f"Median erste Lösung: {_cell(first)} s | "
+        f"Median erster Plan: {_cell(first)} s | "
         f"Median Spätgewinn: {_cell(late)} %"
     )
 
@@ -62,10 +63,18 @@ def render_markdown(
 
     `notes` (z.B. übersprungene Seeds) erscheinen unter der Tabelle.
     """
+    lines = [f"# Benchmark: {title}", ""]
+    lines += table_lines(results, notes)
+    lines += [legend(), ""]
+    return "\n".join(lines)
+
+
+def table_lines(
+    results: list[RunResult], notes: Sequence[str] = ()
+) -> list[str]:
+    """Tabelle, Zusammenfassung und Hinweise als Markdown-Zeilen."""
     headers = [header for header, _ in COLUMNS]
     lines = [
-        f"# Benchmark: {title}",
-        "",
         "| " + " | ".join(headers) + " |",
         "|" + "|".join("---" for _ in headers) + "|",
     ]
@@ -75,17 +84,19 @@ def render_markdown(
     lines += ["", summarize(results), ""]
     if notes:
         lines += [f"- {note}" for note in notes] + [""]
-    lines += [_legend(), ""]
-    return "\n".join(lines)
+    return lines
 
 
-def _legend() -> str:
+def legend() -> str:
+    """Erklärung der Tabellenspalten."""
     return (
+        "- **Stufe 1 s**: Zeit für die Unterrichtsverteilung (Strich = "
+        "Verteilung war vorgegeben).\n"
         "- **Aufbau s**: Zeit für den Modellaufbau.\n"
-        "- **Erste Lösung s**: Suchzeit bis zum ersten gültigen Plan "
-        "(Strich = keiner im Warm-Start gefunden).\n"
-        "- **Gesamt s**: ganzer Lauf (Aufbau, Warm-Start, Optimierung); "
-        "bleibt im Zeitlimit.\n"
+        "- **Erster Plan s**: Wanduhr vom Start (inkl. Stufe 1) bis zum "
+        "ersten gültigen Plan (Strich = keiner gefunden).\n"
+        "- **Gesamt s**: ganzer Lauf (Stufe 1, Aufbau, Warm-Start, "
+        "Optimierung); bleibt im Zeitlimit.\n"
         "- **Spätgewinn %**: Anteil der Verbesserung in den letzten 20 % "
         "der Optimierungszeit. Nahe 0 = ausgereift, hoch = vom Zeitlimit "
         "abgeschnitten.\n"

@@ -42,6 +42,8 @@ DISTRIBUTION_TIME_SHARE = 0.2
 # … so viele Sekunden und mindestens so viele.
 DISTRIBUTION_MAX_SECONDS = 60.0
 DISTRIBUTION_MIN_SECONDS = 5.0
+# Dem Stundenplan-Solver bleibt nach Stufe 1 mindestens so viel Zeit.
+MIN_TIMETABLE_SECONDS = 10
 
 ClassSubject = tuple[str, str]            # (Klasse, Fach)
 ClassSubjectKey = tuple[str, str, str]    # (Lehrkraft, Klasse, Fach)
@@ -101,6 +103,15 @@ def distribution_time_limit(total_seconds: float) -> float:
     return max(
         DISTRIBUTION_MIN_SECONDS, min(DISTRIBUTION_MAX_SECONDS, share)
     )
+
+
+def timetable_time_limit(total_seconds: float, used_seconds: float) -> int:
+    """Zeitlimit des Stundenplan-Solvers nach Stufe 1 (ganze Sekunden).
+
+    Stufe 1 hat `used_seconds` vom Gesamtlimit verbraucht; der Rest,
+    mindestens `MIN_TIMETABLE_SECONDS`, bleibt für den Stundenplan.
+    """
+    return max(MIN_TIMETABLE_SECONDS, round(total_seconds - used_seconds))
 
 
 def sek1_slot_numbers(time_grid: TimeGridConfig) -> list[int]:

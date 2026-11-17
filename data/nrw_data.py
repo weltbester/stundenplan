@@ -30,7 +30,8 @@ from data.coupling_builder import (
     RELIGION_SUBJECT, parallel_coupling, reli_group_subject,
 )
 from data.fake_data import (
-    FIRST_NAMES_F, FIRST_NAMES_M, LAST_NAMES, FakeDataGenerator,
+    FIRST_NAMES_F, FIRST_NAMES_M, LAST_NAMES, CurriculumTable,
+    FakeDataGenerator,
 )
 from models.coupling import (
     COUPLING_TYPE_BAND, COUPLING_TYPE_RELI_ETHIK, COUPLING_TYPE_WPF,
@@ -152,15 +153,18 @@ def round_half(hours: float) -> float:
     return round(hours * HALF_LESSONS_PER_LESSON) / HALF_LESSONS_PER_LESSON
 
 
-def nrw_g9_config(base: SchoolConfig, profile: NrwProfile) -> SchoolConfig:
+def nrw_g9_config(
+    base: SchoolConfig,
+    profile: NrwProfile,
+    curriculum: CurriculumTable = STUNDENTAFEL_NRW_G9,
+) -> SchoolConfig:
     """Konfiguration des Profils: Klassen, Zeitraster und Räume aus
-    `base`; Kopplungen, Deputatsgrenzen und Soll-Stunden nach NRW G9."""
+    `base`; Kopplungen, Deputatsgrenzen und Soll-Stunden nach NRW G9
+    (Soll-Stunden je Jahrgang aus `curriculum`)."""
     grades = GradeConfig(grades=[
         grade.model_copy(update={
-            "weekly_hours_target": sum(
-                STUNDENTAFEL_NRW_G9[grade.grade].values()
-            ),
-        }) if grade.grade in STUNDENTAFEL_NRW_G9 else grade
+            "weekly_hours_target": sum(curriculum[grade.grade].values()),
+        }) if grade.grade in curriculum else grade
         for grade in base.grades.grades
     ])
     return base.model_copy(update={
@@ -442,16 +446,20 @@ class NrwDataGenerator:
         config: SchoolConfig,
         seed: Optional[int] = None,
         profile: Optional[NrwProfile] = None,
+        curriculum: CurriculumTable = STUNDENTAFEL_NRW_G9,
     ) -> None:
+        """`curriculum`: Stundentafel der Klassen (Standard: NRW G9).
+        Die Lehrkräfte entstehen aus dem Bedarf dieser Tafel."""
         self.profile = profile or NrwProfile()
-        self.config = nrw_g9_config(config, self.profile)
+        self._curriculum = curriculum
+        self.config = nrw_g9_config(config, self.profile, curriculum)
         self._rng = random.Random(seed)
         self._used_abbreviations: set[str] = set()
         self._sek2_bands = self._draw_sek2_bands()
 
     def generate(self) -> SchoolData:
         """Vollständiger Datensatz: Klassen, Kopplungen, Lehrkräfte."""
-        base = FakeDataGenerator(self.config, curriculum=STUNDENTAFEL_NRW_G9)
+        base = FakeDataGenerator(self.config, curriculum=self._curriculum)
         classes = base.generate_classes()
         couplings = nrw_couplings(classes, self.config)
         teachers_config = self.config.teachers

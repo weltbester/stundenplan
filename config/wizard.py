@@ -235,8 +235,6 @@ def _wizard_teachers() -> TeacherConfig:
     tz_min = IntPrompt.ask("Teilzeit-Deputat Minimum", default=12)
     tz_max = IntPrompt.ask("Teilzeit-Deputat Maximum", default=20)
     max_day = IntPrompt.ask("Max. Unterrichtsstunden pro Tag (global)", default=6)
-    max_gaps_day = IntPrompt.ask("Max. Springstunden pro Tag (global)", default=1)
-    max_gaps_week = IntPrompt.ask("Max. Springstunden pro Woche (global)", default=3)
     fraction = FloatPrompt.ask(
         "Mindest-Auslastung der Lehrkräfte (0.5–1.0, z.B. 0.50 = Sicherheitsboden)",
         default=0.50,
@@ -254,8 +252,6 @@ def _wizard_teachers() -> TeacherConfig:
         teilzeit_deputat_min=tz_min,
         teilzeit_deputat_max=tz_max,
         max_hours_per_day=max_day,
-        max_gaps_per_day=max_gaps_day,
-        max_gaps_per_week=max_gaps_week,
         deputat_min_fraction=fraction,
         deputat_max_buffer=buffer,
     )
@@ -329,41 +325,51 @@ def _wizard_solver() -> SolverConfig:
         "Höher = wichtiger. 0 = deaktiviert."
     )
 
+    # Alle Vorschläge kommen aus SolverConfig, damit Tabelle, Abfrage und
+    # "Standard-Gewichte übernehmen" dieselben Werte nennen.
+    defaults = SolverConfig()
     table = Table(box=box.SIMPLE)
     table.add_column("Ziel", style="bold")
     table.add_column("Default")
     table.add_column("Bedeutung")
     rows = [
-        ("Springstunden", "100", "Springstunden für Lehrkräfte minimieren"),
-        ("Arbeitslast", "50",  "Gleichmäßige Tagesverteilung"),
-        ("Wunsch-freie Tage", "20", "Wunsch-freie Tage berücksichtigen"),
-        ("Kompakte Pläne", "30", "Lehrkräfte-Pläne kompakt halten"),
-        ("Doppelstunden", "40", "Optionale Doppelstunden bevorzugen"),
+        ("Springstunden", defaults.weight_gaps,
+         "Springstunden für Lehrkräfte minimieren"),
+        ("Wunsch-freie Tage", defaults.weight_day_wishes,
+         "Wunsch-freie Tage berücksichtigen"),
+        ("Doppelstunden", defaults.weight_double_lessons,
+         "Optionale Doppelstunden bevorzugen"),
     ]
-    for r in rows:
-        table.add_row(*r)
+    for goal, default, meaning in rows:
+        table.add_row(goal, str(default), meaning)
     console.print(table)
 
     if Confirm.ask("Standard-Gewichte übernehmen?", default=True):
         _success("Standard-Solver-Gewichte übernommen.")
-        return SolverConfig()
+        return defaults
 
-    time_limit = IntPrompt.ask("Zeitlimit (Sekunden)", default=300)
-    workers = IntPrompt.ask("CPU-Kerne (0=automatisch)", default=0)
-    w_gaps = IntPrompt.ask("Gewicht Springstunden", default=100)
-    w_wb = IntPrompt.ask("Gewicht Arbeitslast", default=50)
-    w_dw = IntPrompt.ask("Gewicht Wunsch-freie Tage", default=20)
-    w_cmp = IntPrompt.ask("Gewicht Kompakte Pläne", default=30)
-    w_dbl = IntPrompt.ask("Gewicht Doppelstunden", default=40)
+    time_limit = IntPrompt.ask(
+        "Zeitlimit (Sekunden)", default=defaults.time_limit_seconds
+    )
+    workers = IntPrompt.ask(
+        "CPU-Kerne (0=automatisch)", default=defaults.num_workers
+    )
+    w_gaps = IntPrompt.ask(
+        "Gewicht Springstunden", default=defaults.weight_gaps
+    )
+    w_dw = IntPrompt.ask(
+        "Gewicht Wunsch-freie Tage", default=defaults.weight_day_wishes
+    )
+    w_dbl = IntPrompt.ask(
+        "Gewicht Doppelstunden", default=defaults.weight_double_lessons
+    )
 
     _success("Solver-Konfiguration abgeschlossen.")
     return SolverConfig(
         time_limit_seconds=time_limit,
         num_workers=workers,
         weight_gaps=w_gaps,
-        weight_workload_balance=w_wb,
         weight_day_wishes=w_dw,
-        weight_compact=w_cmp,
         weight_double_lessons=w_dbl,
     )
 

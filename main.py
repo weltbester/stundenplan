@@ -667,10 +667,6 @@ def _parse_weights(s: str) -> dict:
     return result
 
 
-# Dem Stundenplan-Solver bleibt nach Stufe 1 mindestens so viel Zeit.
-_MIN_TIMETABLE_SECONDS = 10
-
-
 def _run_distribution_stage(
     data: "SchoolData", pins: "list[PinnedLesson]"
 ) -> "tuple[SchoolData, bool]":
@@ -683,6 +679,7 @@ def _run_distribution_stage(
     from solver.distribution import (
         DistributionError, describe_distribution, distribute_teachers,
         distribution_time_limit, forced_by_pins, is_distribution_complete,
+        timetable_time_limit,
     )
 
     if is_distribution_complete(data):
@@ -710,8 +707,8 @@ def _run_distribution_stage(
         sys.exit(1)
 
     console.print(f"[green]✓[/green] {describe_distribution(result)}\n")
-    result.data.config.solver.time_limit_seconds = max(
-        _MIN_TIMETABLE_SECONDS, round(total_limit - result.seconds)
+    result.data.config.solver.time_limit_seconds = timetable_time_limit(
+        total_limit, result.seconds
     )
     return result.data, True
 

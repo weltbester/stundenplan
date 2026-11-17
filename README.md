@@ -251,7 +251,7 @@ time_grid:
     - {slot_first: 5, slot_second: 6}
 
   sek1_max_slot: 7     # Letzte Stunde für Sek-I-Klassen
-  min_hours_per_day: 5
+  min_hours_per_day: 5 # ohne Wirkung (siehe unten)
 ```
 
 ### Jahrgänge
@@ -275,6 +275,8 @@ teachers:
   deputat_min_fraction: 0.50 # Untergrenze = 50% der Obergrenze
   deputat_max_buffer: 6      # Obergrenze = Soll (aufgerundet) + 6h
   deputat_min_buffer: 2      # optional: Untergrenze = Soll (abgerundet) - 2h
+  max_gaps_per_day: 1        # ohne Wirkung (siehe unten)
+  max_gaps_per_week: 3       # ohne Wirkung (siehe unten)
 ```
 
 Jede Lehrkraft hat ein **Soll-Deputat** (Spalte *Deputat* im Blatt
@@ -301,13 +303,25 @@ erreichen, egal wie der Plan aussieht.
 solver:
   time_limit_seconds: 300
   weight_gaps: 200          # Springstunden minimieren
-  weight_workload_balance: 50
   weight_double_lessons: 40
-  weight_compact: 30
   weight_day_wishes: 20
   weight_deputat_deviation: 50  # Nähe zum Soll-Deputat (immer aktiv)
+  max_gaps_per_week: 0      # hartes Springstunden-Limit (0 = keins)
   subject_day_limit: true   # Regel C15 (siehe Constraint-Übersicht)
 ```
+
+**Einstellungen ohne Wirkung.** Diese Felder werden noch gelesen,
+damit bestehende Konfigurationen laden, der Solver beachtet sie aber
+nicht:
+
+| Feld | Hinweis |
+|------|---------|
+| `time_grid.min_hours_per_day` | Tagesbeginn und lückenlose Klassenpläne regeln C9/C10 |
+| `teachers.max_gaps_per_day` (auch Excel-Spalte *Max Springstd/Tag*) | keine Regel prüft es |
+| `teachers.max_gaps_per_week` | wirksam ist nur `solver.max_gaps_per_week` |
+| `solver.weight_workload_balance` | gleichmäßige Tagesverteilung nie umgesetzt |
+| `solver.weight_compact` | kompakte Lehrerpläne entstehen über `weight_gaps` |
+| `solver.weight_subject_spread` | ersetzt durch die harte Regel C15 |
 
 `subject_day_limit: false` schaltet die Regel C15 ab. Solver und
 `validate --solution` lesen die Einstellung aus dem Datensatz
@@ -512,11 +526,13 @@ stundenplan/
 | C14 | Springstunden-Limit (optional) | Hart/Weich |
 | C15 | Pro Klasse, Fach und Tag max. 1 Stunde oder 1 Doppelblock | Hart (abschaltbar) |
 | S1 | Springstunden minimieren | Weich |
-| S2 | Gleichmäßige Tagesverteilung | Weich |
 | S3 | Wunsch-freie Tage honorieren | Weich |
-| S4 | Kompakte Lehrerpläne | Weich |
 | S5 | Optionale Doppelstunden fördern | Weich |
 | S6 | Nähe zum Soll-Deputat je Lehrkraft (quadratisch) | Weich |
+
+S2 (gleichmäßige Tagesverteilung) und S4 (kompakte Lehrerpläne) standen
+hier früher, waren aber nie umgesetzt; ihre Gewichte sind ohne Wirkung.
+Die Nummern der übrigen Regeln bleiben, damit ältere Hinweise passen.
 
 **C15 im Detail:** Zwei Stunden desselben Fachs am selben Tag sind nur
 als konfigurierter Doppelstunden-Block (z.B. 1–2, 3–4, 5–6) erlaubt, drei
@@ -600,23 +616,41 @@ Misst den Solver über mehrere Seeds und schreibt eine Tabelle nach
 Solver-Änderung.
 
 ```bash
-python3.14 -m benchmarks.run_benchmark --dataset loose-36 --seeds 3
-python3.14 -m benchmarks.run_benchmark --dataset loose-36-fixed --seeds 3
+python3.14 -m benchmarks.run_benchmark --dataset nrw-36-fixed --seeds 3
 python3.14 -m benchmarks.run_benchmark --seeds 1 --time-limit 60 \
     --label schnelltest
+python3.14 -m benchmarks.run_benchmark --all --seeds 5   # Leiter, ~3 h
 ```
 
-Datensätze: `loose-36` (Solver verteilt die Lehrkräfte selbst) und
-`loose-36-fixed` (dieselben Daten mit vollständig vorgegebener
-Unterrichtsverteilung). Seeds, deren generierte Daten den
+| Datensatz | Inhalt |
+|-----------|--------|
+| `nrw-18`, `nrw-30`, `nrw-36` | Profil `nrw-g9` mit 3, 5, 6 Klassen je Jahrgang; das Programm wählt die Lehrkräfte (Stufe 1, dann Stundenplan) |
+| `nrw-18-fixed`, `nrw-30-fixed`, `nrw-36-fixed` | dieselben Daten mit vorgegebener Unterrichtsverteilung |
+| `long-day-36` | Frühwarnung: wie `nrw-36-fixed`, aber 8 Sek-I-Stunden am Tag (Doppelblock 7–8) und 34/36 Wochenstunden je Klasse (je +1 Deutsch, Mathematik, Englisch, Ergänzungsstunde) |
+| `loose-36`, `loose-36-fixed` | alte großzügige Testdaten (Profil `loose`) |
+
+Ist die Unterrichtsverteilung offen, läuft wie bei `main.py solve`
+zuerst Stufe 1; ihre Zeit zählt mit. Seeds, deren generierte Daten den
 Machbarkeits-Check nicht bestehen, werden übersprungen und unter der
 Tabelle genannt.
 
+**Leiter (`--all`).** Stufen `nrw-18` → `nrw-30` → `nrw-36`, danach
+`long-day-36`. Für die Abnahme einer Stufe zählt nur der Datensatz mit
+vorgegebener Verteilung; er muss auf **jedem** Seed (Standard 5)
+einen gültigen Plan in unter 60 s liefern, null Validator-Fehler haben
+und weniger als 5 % der Verbesserung im letzten Fünftel der Suchzeit
+erzielen. Der Datensatz, in dem das Programm die Lehrkräfte wählt,
+wird nur berichtet. Fällt eine Stufe durch, endet die Leiter; der
+Bericht nennt die Gründe je Seed und die nicht gerechneten Datensätze.
+Rückgabewert 1 bei nicht bestandener Abnahme. Mit dem Standard-Zeitlimit
+von 300 s dauert die ganze Leiter rund drei Stunden.
+
 | Spalte | Bedeutung |
 |--------|-----------|
+| Stufe 1 s | Zeit für die Unterrichtsverteilung (Strich = vorgegeben) |
 | Aufbau s | Zeit für den Modellaufbau |
-| Erste Lösung s | Suchzeit bis zum ersten gültigen Plan |
-| Gesamt s | Ganzer Lauf (Aufbau, Warm-Start, Optimierung); bleibt im Zeitlimit |
+| Erster Plan s | Wanduhr vom Start (inkl. Stufe 1) bis zum ersten gültigen Plan |
+| Gesamt s | Ganzer Lauf (Stufe 1, Aufbau, Warm-Start, Optimierung); bleibt im Zeitlimit |
 | Spätgewinn % | Anteil der Verbesserung in den letzten 20 % der Optimierungszeit (nahe 0 = ausgereift) |
 | Fach-Häufungen | Klasse hat dasselbe Fach 3× oder öfter an einem Tag |
 | Validator-Fehler | Verstöße laut unabhängiger Nachprüfung |

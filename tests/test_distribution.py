@@ -12,7 +12,8 @@ from solver.distribution import (
     DistributionResult, describe_distribution, distribute_teachers,
     distribution_time_limit, double_block_pairs, forced_by_pins,
     is_distribution_complete, lessons_every_day, open_class_subjects,
-    open_coupling_groups, sek1_slot_numbers, weekly_class_lessons,
+    open_coupling_groups, sek1_slot_numbers, timetable_time_limit,
+    weekly_class_lessons,
 )
 from solver.pinning import PinnedLesson
 from solver.scheduler import ScheduleSolver
@@ -478,3 +479,15 @@ class TestCouplingCapacity:
         for coupling in result.data.couplings:
             chosen = {group.teacher_id for group in coupling.groups}
             assert SPARE_TEACHER in chosen
+
+
+class TestTimetableTimeLimit:
+    """Zeitlimit des Stundenplans nach Stufe 1."""
+
+    def test_rest_of_the_limit_is_left(self):
+        assert timetable_time_limit(300, 60.4) == 240
+
+    def test_never_below_the_floor(self):
+        from solver.distribution import MIN_TIMETABLE_SECONDS
+
+        assert timetable_time_limit(30, 29.0) == MIN_TIMETABLE_SECONDS

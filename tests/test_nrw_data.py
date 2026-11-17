@@ -424,3 +424,38 @@ class TestProfiles:
         assert "Kapazitätsreserve" in result.output
         assert "LÖSBAR" in result.output
         assert "NICHT LÖSBAR" not in result.output
+
+
+class TestOwnCurriculum:
+    """Eigene Stundentafel: Klassen, Soll-Stunden und Bedarf folgen ihr."""
+
+    EXTRA_GERMAN = 2
+
+    def _curriculum(self) -> dict[int, dict[str, int]]:
+        return {
+            grade: {
+                **table,
+                "Deutsch": table.get("Deutsch", 0) + self.EXTRA_GERMAN,
+            }
+            for grade, table in STUNDENTAFEL_NRW_G9.items()
+        }
+
+    def test_classes_and_weekly_target_follow_the_table(self):
+        curriculum = self._curriculum()
+        generator = NrwDataGenerator(
+            _config(1), seed=1, curriculum=curriculum
+        )
+        data = generator.generate()
+        for school_class in data.classes:
+            assert school_class.curriculum == curriculum[school_class.grade]
+        for grade in generator.config.grades.grades:
+            assert grade.weekly_hours_target == sum(
+                curriculum[grade.grade].values()
+            )
+
+    def test_default_is_the_nrw_g9_table(self):
+        data = _generate(seed=1, parallel_classes=1)
+        for school_class in data.classes:
+            assert school_class.curriculum == (
+                STUNDENTAFEL_NRW_G9[school_class.grade]
+            )

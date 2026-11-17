@@ -2,6 +2,7 @@
 
 Aufruf (aus dem Projektverzeichnis):
     python3.14 -m benchmarks.run_benchmark --dataset loose-36 --seeds 3
+    python3.14 -m benchmarks.run_benchmark --all --seeds 5
 """
 
 import argparse
@@ -12,6 +13,7 @@ from benchmarks.assignment import AssignmentError
 from benchmarks.datasets import (
     DatasetFactory, build_dataset, dataset_names,
 )
+from benchmarks.ladder import render_ladder, run_ladder
 from benchmarks.report import render_markdown, write_csv, write_markdown
 from benchmarks.runner import RunResult, run_once
 from models.school_data import SchoolData
@@ -20,6 +22,8 @@ BASE_SEED = 42
 DEFAULT_SEED_COUNT = 3
 DEFAULT_TIME_LIMIT = 300
 DEFAULT_LABEL = "baseline"
+DEFAULT_DATASET = "loose-36"
+LADDER_LABEL = "leiter"
 DEFAULT_OUTPUT_DIR = Path("output/benchmarks")
 # Höchstens so viele Seeds je gewünschtem Lauf werden durchprobiert.
 MAX_ATTEMPTS_PER_RUN = 5
@@ -32,9 +36,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Misst den Stundenplan-Solver über mehrere Seeds."
     )
-    parser.add_argument(
-        "--dataset", default="loose-36", choices=dataset_names(),
-        help="Datensatz (Standard: loose-36).",
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument(
+        "--dataset", default=DEFAULT_DATASET, choices=dataset_names(),
+        help=f"Datensatz (Standard: {DEFAULT_DATASET}).",
+    )
+    target.add_argument(
+        "--all", action="store_true",
+        help="Benchmark-Leiter nrw-18 → nrw-30 → nrw-36 mit Abnahme, "
+        "danach long-day-36.",
     )
     parser.add_argument(
         "--seeds", type=int, default=DEFAULT_SEED_COUNT,
@@ -45,8 +55,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Solver-Zeitlimit pro Lauf in Sekunden (Standard: 300).",
     )
     parser.add_argument(
-        "--label", default=DEFAULT_LABEL,
-        help="Dateiname der Ergebnisse ohne Endung (Standard: baseline).",
+        "--label", default=None,
+        help=f"Dateiname der Ergebnisse ohne Endung (Standard: "
+        f"{DEFAULT_LABEL}, mit --all {LADDER_LABEL}).",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
@@ -120,15 +131,21 @@ def run_benchmark(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Einstiegspunkt: Läufe ausführen, Tabelle ausgeben und speichern."""
+    """Einstiegspunkt: Läufe ausführen, Tabelle ausgeben und speichern.
+
+    Mit `--all` ist der Rückgabewert 1, wenn die Abnahme scheitert.
+    """
     args = parse_args(argv)
+    if args.all:
+        return _main_ladder(args)
+    label = args.label or DEFAULT_LABEL
     results, notes = run_benchmark(
         args.dataset, args.seeds, args.time_limit
     )
 
-    title = f"{args.label} ({args.dataset})"
-    markdown_path = args.output_dir / f"{args.label}.md"
-    csv_path = args.output_dir / f"{args.label}.csv"
+    title = f"{label} ({args.dataset})"
+    markdown_path = args.output_dir / f"{label}.md"
+    csv_path = args.output_dir / f"{label}.csv"
     write_markdown(results, title, markdown_path, notes)
     write_csv(results, csv_path)
 
@@ -136,6 +153,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(render_markdown(results, title, notes))
     print(f"Gespeichert: {markdown_path} und {csv_path}")
     return 0
+
+
+def _main_ladder(args: argparse.Namespace) -> int:
+    """Leiter rechnen, Bericht ausgeben und speichern."""
+    label = args.label or LADDER_LABEL
+    report = run_ladder(run_benchmark, args.seeds, args.time_limit)
+    text = render_ladder(
+        report, f"{label} ({args.seeds} Seeds, {args.time_limit} s)"
+    )
+    markdown_path = args.output_dir / f"{label}.md"
+    csv_path = args.output_dir / f"{label}.csv"
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text(text, encoding="utf-8")
+    write_csv(report.all_results(), csv_path)
+
+    print()
+    print(text)
+    print(f"Gespeichert: {markdown_path} und {csv_path}")
+    return 0 if report.passed else 1
 
 
 if __name__ == "__main__":

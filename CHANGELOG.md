@@ -98,6 +98,22 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 - `template --from-data … [--from-solution …]` schreibt eine
   ausgefüllte, wieder importierbare Vorlage aus einem Datensatz und
   optional der Unterrichtsverteilung eines Plans.
+- Benchmark-Leiter (`python3.14 -m benchmarks.run_benchmark --all`):
+  Datensätze `nrw-18`, `nrw-30`, `nrw-36` (Profil `nrw-g9` mit 3, 5,
+  6 Klassen je Jahrgang) jeweils mit vorgegebener Verteilung
+  (`-fixed`, zählt für die Abnahme) und mit Wahl der Lehrkräfte durch
+  das Programm (nur Bericht), dazu der Frühwarn-Datensatz
+  `long-day-36` (8 Sek-I-Stunden am Tag, 34/36 Wochenstunden). Abnahme
+  je Stufe auf jedem Seed: gültiger Plan in unter 60 s, null
+  Validator-Fehler, weniger als 5 % Spätgewinn; eine Stufe zählt nur,
+  wenn die vorige bestanden hat. Die Abnahme-Zeile nennt die
+  gelösten Seeds. Bericht als Markdown und CSV.
+- Benchmark: Datensätze mit offener Unterrichtsverteilung rechnen wie
+  `main.py solve` zuerst Stufe 1 (neue Spalte "Stufe 1 s"). Die Spalte
+  "Erster Plan s" misst die Wanduhr vom Start bis zum ersten gültigen
+  Plan und ersetzt "Erste Lösung s" (nur Warm-Start-Suchzeit).
+- `NrwDataGenerator` nimmt eine eigene Stundentafel (`curriculum`);
+  Lehrkräfte-Bedarf und Soll-Wochenstunden folgen ihr.
 
 ### Changed
 - Das Soft-Ziel "Hauptfach-Verteilung" ist entfernt: es belohnte das
@@ -169,8 +185,28 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   (`TEXT_MARKUP` statt `USE_RICH_MARKUP`/`USE_MARKDOWN`, Metavar-Spalte
   als Standard); die drei Abkündigungs-Warnungen entfallen, die Ausgabe
   ist unverändert. Mindestversion jetzt rich-click 1.9.
+- README: die nie umgesetzten weichen Ziele S2 (gleichmäßige
+  Tagesverteilung) und S4 (kompakte Lehrerpläne) sind aus der
+  Constraint-Übersicht entfernt. Einstellungen ohne Wirkung
+  (`time_grid.min_hours_per_day`, `teachers.max_gaps_per_day`,
+  `teachers.max_gaps_per_week`, `solver.weight_workload_balance`,
+  `solver.weight_compact`, `solver.weight_subject_spread`) sind in
+  README und Konfigurations-Schema als solche gekennzeichnet; sie laden
+  weiter, damit bestehende Dateien gültig bleiben.
+- Einrichtungs-Assistent (`config/wizard.py`): fragt die Gewichte
+  "Arbeitslast" und "Kompakte Pläne" sowie die Springstunden-Grenzen je
+  Lehrkraft (pro Tag, pro Woche) nicht mehr ab; sie hatten keine
+  Wirkung. Die Felder behalten ihre Standardwerte.
+- Einrichtungs-Assistent, Schritt 7: Vorschlagswerte (Gewichte,
+  Zeitlimit, CPU-Kerne) kommen aus `SolverConfig`.
+- Die Regel für das Zeitlimit des Stundenplans nach Stufe 1 steht
+  jetzt in `solver/distribution.py` (`timetable_time_limit`) und gilt
+  für `main.py solve` und den Benchmark gleich.
 
 ### Fixed
+- Einrichtungs-Assistent: Gewicht Springstunden zeigte und schlug 100
+  vor, "Standard-Gewichte übernehmen" setzte aber 200. Jetzt überall
+  200 (Standard, auf `weight_deputat_deviation` abgestimmt).
 - Excel-Import: Das Blatt "Stundentafel" wird jetzt eingelesen; bisher
   galt immer die eingebaute Stundentafel, Änderungen im Blatt blieben
   wirkungslos.

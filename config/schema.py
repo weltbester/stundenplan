@@ -75,9 +75,11 @@ class TimeGridConfig(BaseModel):
     # Letzte Stunde für Sek-I-Klassen
     sek1_max_slot: int = Field(7,
         description="Letzte Stunde für Sek-I-Klassen")
-    # Minimale Stunden pro Tag für Klassen
+    # OHNE WIRKUNG: der Solver liest das Feld nicht (der Tagesbeginn in
+    # Stunde 1 und lückenlose Klassenpläne folgen aus C9/C10). Es bleibt,
+    # damit bestehende YAML-Dateien laden.
     min_hours_per_day: int = Field(5, ge=3, le=8,
-        description="Minimale Stunden pro Tag für Klassen")
+        description="Ohne Wirkung (vom Solver nicht gelesen)")
 
     @model_validator(mode='after')
     def validate_double_blocks(self):
@@ -160,12 +162,13 @@ class TeacherConfig(BaseModel):
     # Globaler Default: max. Unterrichtsstunden pro Tag
     max_hours_per_day: int = Field(6, ge=4, le=8,
         description="Max Unterrichtsstunden pro Tag (globaler Default)")
-    # Globaler Default: max. Springstunden pro Tag
+    # OHNE WIRKUNG: wird an die Lehrkräfte weitergegeben, aber von keiner
+    # Regel geprüft. Wirksam ist nur solver.max_gaps_per_week.
     max_gaps_per_day: int = Field(1, ge=0, le=3,
-        description="Max Springstunden pro Tag (globaler Default)")
-    # Globaler Default: max. Springstunden pro Woche
+        description="Ohne Wirkung (keine Regel prüft es)")
+    # OHNE WIRKUNG: wirksam ist nur solver.max_gaps_per_week.
     max_gaps_per_week: int = Field(3, ge=0, le=10,
-        description="Max Springstunden pro Woche (globaler Default)")
+        description="Ohne Wirkung (siehe solver.max_gaps_per_week)")
     # Mindestauslastung relativ zu deputat_max (0.5–1.0)
     # 0.50 = Sicherheitsboden; in Produktionskonfigurationen eher 0.75–0.90.
     deputat_min_fraction: float = Field(
@@ -289,15 +292,17 @@ class SolverConfig(BaseModel):
     # Gewicht für Minimierung von Springstunden
     weight_gaps: int = Field(200, ge=0,
         description="Gewicht: Springstunden minimieren")
-    # Gewicht für gleichmäßige Verteilung der Arbeitslast
+    # OHNE WIRKUNG: die angekündigte gleichmäßige Tagesverteilung wurde nie
+    # umgesetzt. Das Feld bleibt, damit bestehende YAML-Dateien laden.
     weight_workload_balance: int = Field(50, ge=0,
-        description="Gewicht: Gleichmäßige Tagesverteilung")
+        description="Ohne Wirkung (nie umgesetzt)")
     # Gewicht für Berücksichtigung von Wunsch-freien Tagen
     weight_day_wishes: int = Field(20, ge=0,
         description="Gewicht: Wunsch-freie Tage")
-    # Gewicht für kompakte Lehrer-Pläne (wenig Lücken)
+    # OHNE WIRKUNG: kompakte Lehrerpläne entstehen über weight_gaps
+    # (Springstunden). Das Feld bleibt, damit bestehende YAML-Dateien laden.
     weight_compact: int = Field(30, ge=0,
-        description="Gewicht: Kompakte Lehrer-Pläne")
+        description="Ohne Wirkung (siehe weight_gaps)")
     # Gewicht für optionale Doppelstunden
     weight_double_lessons: int = Field(40, ge=0,
         description="Gewicht: Optionale Doppelstunden")

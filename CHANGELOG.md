@@ -38,6 +38,22 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Machbarkeits-Check und `template --from-data` richten sich nach der
   Fächerliste des Datensatzes; Mappen ohne das Blatt und ältere
   JSON-Dateien funktionieren weiter.
+- Testdaten-Profil `nrw-g9` (`main.py generate --profile nrw-g9`,
+  `main.py validate --generate --profile nrw-g9 --seed N`): ein
+  NRW-Gymnasium mit der G9-Stundentafel. Die Lehrkräfte werden aus dem
+  Bedarf je Fach abgeleitet (jedes Fach ist besetzt, rund 4 % Reserve),
+  Soll 25,5 Stunden mit engen Grenzen, rund 30 % Teilzeit mit freiem Tag
+  oder einer gesperrten Randstunde, Sperrzeiten für den Unterricht in
+  der Sek II (in acht gemeinsamen Oberstufen-Schienen statt zufällig je
+  Lehrkraft), je Klasse eine Gruppe in Religion/Praktische Philosophie, WPF
+  und Sprachen-Schiene (`data/nrw_data.py`). Das bisherige Profil heißt
+  `loose` und bleibt Standard.
+- Zusammenfassung des Datensatzes: Unterrichtsbedarf in Lehrerstunden
+  und Kapazitätsreserve (Soll-Deputate über Bedarf).
+- `validate --generate` nimmt `--profile` und `--seed`.
+- Reli-Gruppen: heißt eine Gruppe in `couplings.reli_groups` wie ein
+  Fach (z.B. "Praktische Philosophie"), unterrichtet sie dieses Fach;
+  bisher ging das nur für "ethik".
 - Eingebaute Stundentafel für NRW, Gymnasium G9 (`config/nrw_g9.py`):
   eine Beispielverteilung nach APO-S I, Anlage 3a, mit 182 Kernstunden
   und 6 Ergänzungsstunden (30, 30, 32, 32, 32, 32 Wochenstunden),

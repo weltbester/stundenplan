@@ -92,6 +92,7 @@ python main.py config edit             # Konfiguration interaktiv bearbeiten
 python main.py generate                # Realistische Testdaten erzeugen
 python main.py generate --export-json  # Testdaten + JSON speichern
 python main.py generate --seed 123     # Reproduzierbare Daten (Seed)
+python main.py generate --profile nrw-g9   # NRW-Gymnasium, knapp besetzt
 
 python main.py template                # Excel-Import-Vorlage erzeugen
 python main.py template --from-data output/school_data.json \
@@ -99,7 +100,29 @@ python main.py template --from-data output/school_data.json \
 python main.py import lehrkraefte.xlsx # Echte Schuldaten aus Excel importieren
 python main.py validate                # Machbarkeits-Check (ohne Lösung)
 python main.py validate --solution     # Lösung zusätzlich validieren
+python main.py validate --generate --profile nrw-g9 --seed 43
+                                       # Testdaten erzeugen und nur prüfen
 ```
+
+#### Testdaten-Profile
+
+`generate` und `validate --generate` kennen zwei Profile. Klassenzahl,
+Zeitraster und Fachräume kommen in beiden aus der Konfiguration.
+
+| | `loose` (Standard) | `nrw-g9` |
+|---|---|---|
+| Stundentafel | ältere Beispiel-Tafel (entspricht keinem Land) | NRW G9 (`config/nrw_g9.py`) |
+| Lehrkräfte | feste Zahl aus der Konfiguration, zufällige Fächer | aus dem Bedarf je Fach abgeleitet; jedes Fach ist besetzt |
+| Reserve (Soll über Bedarf) | rund 18 % | rund 4 % |
+| Soll und Grenzen | 26 Stunden, Grenzen 16–32 | 25,5 Stunden, Grenzen Soll −2 bis +1 |
+| Sek II | nicht berücksichtigt | ein Teil des Deputats liegt in der Sek II: geringeres Sek-I-Soll und Sperrzeiten in acht gemeinsamen Oberstufen-Schienen (Doppelstunden, für alle Lehrkräfte dieselben) |
+| Teilzeit | rund 30 %, einzelne Wunschtage | rund 30 %, mit freiem Tag oder einer gesperrten Randstunde (1. oder 7. Stunde) |
+| Kopplungen | drei Reli-Gruppen und zwei WPF-Gruppen je Jahrgang | eine Gruppe je Klasse: Religion/Praktische Philosophie, WPF, Sprachen-Schiene |
+
+Das Profil `nrw-g9` ist für realistische Belastungstests gedacht. Die
+Zusammenfassung zeigt den Unterrichtsbedarf in Lehrerstunden und die
+Kapazitätsreserve. Die Stellschrauben (Sek-II-Anteile, Reserve,
+Teilzeit) stehen in `NrwProfile` in `data/nrw_data.py`.
 
 ### Solver
 
@@ -375,10 +398,11 @@ Der Machbarkeits-Check warnt, wenn ein Jahrgang den Wochenstundenrahmen
 verlässt (NRW G9: 28–30 Stunden in Kl. 5–6, 30–33 in Kl. 7–10). Geprüft
 wird nur bei `bundesland: NRW` und Schulform Gymnasium.
 
-Die Testdaten aus `main.py generate` nutzen bis auf Weiteres die ältere
-Beispiel-Tafel (28, 31, 32, 32, 34, 34 Stunden), auf die ihr
-Lehrkräfte-Pool abgestimmt ist. Der Check meldet dort deshalb
-Jahrgänge außerhalb des Rahmens.
+Die Testdaten im Profil `loose` (Standard von `main.py generate`)
+nutzen die ältere Beispiel-Tafel (28, 31, 32, 32, 34, 34 Stunden), auf
+die ihr Lehrkräfte-Pool abgestimmt ist. Der Check meldet dort deshalb
+Jahrgänge außerhalb des Rahmens. Das Profil `nrw-g9` nutzt die
+NRW-Tafel (siehe *Testdaten-Profile*).
 
 ### Eigene Fächer
 

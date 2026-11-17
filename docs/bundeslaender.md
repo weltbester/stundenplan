@@ -141,7 +141,7 @@ Alles andere Landesspezifische muss über die Eingabedaten kommen.
 | Samstagsunterricht | Teilweise | 6-Tage-Woche geht; "zwei Samstage im Monat" nicht. |
 | Höchstens eine Stunde oder ein Doppelblock je Fach und Tag (C15) | Eigene Regel | Kein Land schreibt sie vor; abschaltbar mit `solver.subject_day_limit: false`. |
 | Wochenstundenrahmen je Jahrgang | Nur NRW G9 | Warnung im Machbarkeits-Check; andere Länder brauchen nur ihre Zahlen (`models/weekly_frame_check.py`). |
-| Lehrkräfte mit Sek-II-Anteil | Teilweise | Nur über Sperrzeiten. |
+| Lehrkräfte mit Sek-II-Anteil | Teilweise | Nur über Sperrzeiten und ein geringeres Sek-I-Soll; die Testdaten im Profil `nrw-g9` bilden das so nach. |
 
 Nicht bestätigt: der Kommentar im Solver, 7 Springstunden pro Woche seien
 ein rechtlicher Richtwert für Lehrkräfte. Dafür wurde keine Quelle

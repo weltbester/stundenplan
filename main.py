@@ -342,19 +342,29 @@ def config_edit():
               help="Pfad für JSON-Export.")
 @click.option("--validate", "run_validate", is_flag=True, default=True,
               help="Machbarkeits-Check nach Generierung.")
-def cmd_generate(seed: int, export_json: bool, json_path: str, run_validate: bool):
-    """[bold]Erzeugt realistische Testdaten[/bold] (Lehrkräfte, Klassen, Räume, Kopplungen).
+@click.option("--profile", default="loose",
+              type=click.Choice(["loose", "nrw-g9"]),
+              help="Testdaten-Profil: 'loose' (bisherige Daten) oder "
+                   "'nrw-g9' (NRW-Gymnasium, knapp besetzt).")
+def cmd_generate(seed: int, export_json: bool, json_path: str,
+                 run_validate: bool, profile: str):
+    """[bold]Erzeugt Testdaten[/bold] (Lehrkräfte, Klassen, Räume, Kopplungen).
 
-    Enthält absichtliche Engpässe (Chemie-Mangel, Freitag-Cluster,
-    Fachraum-Limits) für einen realistischen Solver-Test.
+    Profil [cyan]loose[/cyan]: alte Beispiel-Stundentafel, großzügig
+    besetzt, mit absichtlichen Engpässen (Chemie-Mangel, Freitag-Cluster).
+    Profil [cyan]nrw-g9[/cyan]: Stundentafel NRW G9, Lehrkräfte nach
+    Bedarf mit wenigen Prozent Reserve, Soll 25,5 Stunden, Teilzeit und
+    Sperrzeiten für den Unterricht in der Sek II.
     """
     mgr, config = _load_config_or_abort()
     from data.fake_data import FakeDataGenerator
+    from data.generators import generate_school_data
 
-    console.print("[bold]Testdaten werden generiert...[/bold]")
-    gen = FakeDataGenerator(config, seed=seed)
-    data = gen.generate()
-    gen.print_summary(data)
+    console.print(
+        f"[bold]Testdaten werden generiert (Profil {profile})...[/bold]"
+    )
+    data = generate_school_data(config, seed, profile)
+    FakeDataGenerator(config).print_summary(data)
 
     console.print(f"\n[dim]{data.summary()}[/dim]")
 
@@ -492,14 +502,19 @@ def cmd_import(datei: Path, save_json: bool, json_path: str):
 @click.command("validate")
 @click.option("--json-path", default=str(DEFAULT_DATA_JSON),
               help="Pfad zur gespeicherten JSON-Datei.")
+@click.option("--profile", default="loose",
+              type=click.Choice(["loose", "nrw-g9"]),
+              help="Testdaten-Profil für --generate.")
+@click.option("--seed", default=42,
+              help="Zufalls-Seed für --generate.")
 @click.option("--generate", "gen_first", is_flag=True, default=False,
               help="Testdaten zunächst generieren (Seed 42).")
 @click.option("--solution-path", default=str(DEFAULT_SOLUTION_JSON),
               help="Pfad zur solution.json für Post-Solve-Validierung.")
 @click.option("--solution", "validate_solution", is_flag=True, default=False,
               help="Post-Solve-Validierung der fertigen Lösung ausführen.")
-def cmd_validate(json_path: str, gen_first: bool,
-                 solution_path: str, validate_solution: bool):
+def cmd_validate(json_path: str, gen_first: bool, solution_path: str,
+                 validate_solution: bool, profile: str, seed: int):
     """Führt einen Machbarkeits-Check auf dem aktuellen Datensatz durch.
 
     Mit --solution wird zusätzlich die fertige Lösung auf Constraint-Verletzungen geprüft.
@@ -508,9 +523,8 @@ def cmd_validate(json_path: str, gen_first: bool,
 
     if gen_first:
         mgr, config = _load_config_or_abort()
-        from data.fake_data import FakeDataGenerator
-        gen = FakeDataGenerator(config, seed=42)
-        data = gen.generate()
+        from data.generators import generate_school_data
+        data = generate_school_data(config, seed, profile)
     else:
         p = Path(json_path)
         if not p.exists():

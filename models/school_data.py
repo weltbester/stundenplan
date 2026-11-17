@@ -6,7 +6,10 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from models.subject import Subject
-from models.deputat_check import check_target_balance, total_target_hours
+from models.deputat_check import (
+    PERCENT, check_target_balance, target_margin, teacher_lessons_needed,
+    total_target_hours,
+)
 from models.subject_check import check_subject_references
 from models.weekly_frame_check import check_weekly_frame
 from models.teacher import format_hours
@@ -76,6 +79,10 @@ class SchoolData(BaseModel):
             self.teachers, self.config.teachers.deputat_max_buffer
         )
         num_teilzeit = sum(1 for t in self.teachers if t.is_teilzeit)
+        margin = target_margin(
+            self.teachers, self.classes, self.couplings,
+            self.config.teachers.deputat_max_buffer,
+        )
         lines = [
             f"Schule: {self.config.school_name}",
             f"Klassen: {len(self.classes)} "
@@ -88,6 +95,10 @@ class SchoolData(BaseModel):
             f"Gesamtbedarf (Curriculum): {total_need}h/Woche",
             f"Puffer: {total_dep - total_need:+d}h "
             f"({(total_dep/total_need - 1)*100:.1f}%)" if total_need else "",
+            f"Unterrichtsbedarf (Lehrerstunden): "
+            f"{teacher_lessons_needed(self.classes, self.couplings)}h/Woche",
+            f"Kapazitätsreserve (Soll-Deputate über Bedarf): "
+            f"{margin * PERCENT:+.1f}%" if margin is not None else "",
             f"Räume (Fachräume): {len(self.rooms)}",
             f"Kopplungen: {len(self.couplings)}",
         ]

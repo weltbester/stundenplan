@@ -1,5 +1,7 @@
 """Vergleicht die Soll-Deputate mit dem Unterrichtsbedarf."""
 
+from typing import Optional
+
 from models.coupling import Coupling
 from models.fixed_assignment import coupling_subjects_by_class
 from models.school_class import SchoolClass
@@ -35,6 +37,22 @@ def teacher_lessons_needed(
 def total_target_hours(teachers: list[Teacher], max_buffer: int) -> float:
     """Summe der Soll-Stunden aller Lehrkräfte."""
     return sum(teacher.target_hours(max_buffer) for teacher in teachers)
+
+
+def target_margin(
+    teachers: list[Teacher],
+    classes: list[SchoolClass],
+    couplings: list[Coupling],
+    max_buffer: int,
+) -> Optional[float]:
+    """Anteil, um den die Soll-Summe über dem Bedarf liegt (0.04 = 4 %).
+
+    None, wenn es keinen Bedarf gibt.
+    """
+    needed = teacher_lessons_needed(classes, couplings)
+    if needed == 0:
+        return None
+    return total_target_hours(teachers, max_buffer) / needed - 1
 
 
 def check_target_balance(

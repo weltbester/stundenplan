@@ -31,27 +31,28 @@ from models.coupling import (
     COUPLING_TYPE_BAND, Coupling, CouplingGroup,
 )
 from models.school_data import SchoolData
+from data.coupling_builder import parallel_coupling, reli_group_subject
 
 # Jahrgang → Fach → Wochenstunden
 CurriculumTable = dict[int, dict[str, int]]
 
 # ─── Namens-Listen ────────────────────────────────────────────────────────────
 
-_FIRST_NAMES_M = [
+FIRST_NAMES_M = [
     "Andreas", "Bernd", "Christian", "Dieter", "Franz", "Hans", "Jürgen",
     "Klaus", "Ludwig", "Markus", "Michael", "Norbert", "Peter", "Stefan",
     "Thomas", "Tobias", "Ulrich", "Werner", "Yusuf", "Martin", "Robert",
     "Wolfgang", "Rainer", "Manfred", "Helmut", "Gerhard", "Günter",
 ]
 
-_FIRST_NAMES_F = [
+FIRST_NAMES_F = [
     "Anna", "Birgit", "Christine", "Eva", "Gabi", "Iris", "Kathrin",
     "Karin", "Lena", "Maria", "Olga", "Renate", "Sandra", "Tanja",
     "Ulrike", "Vera", "Xenia", "Zoe", "Monika", "Sabine", "Heike",
     "Ute", "Claudia", "Petra", "Ingrid", "Brigitte", "Elisabeth",
 ]
 
-_LAST_NAMES = [
+LAST_NAMES = [
     "Müller", "Schmidt", "Schneider", "Fischer", "Weber", "Meyer",
     "Wagner", "Becker", "Schulz", "Hoffmann", "Schäfer", "Koch",
     "Bauer", "Richter", "Klein", "Wolf", "Schröder", "Neumann",
@@ -200,9 +201,11 @@ class FakeDataGenerator:
         unavailable_slots: Optional[list[tuple[int, int]]] = None,
     ) -> Teacher:
         """Erstellt eine Lehrkraft mit zufälligem Namen."""
-        first_names = _FIRST_NAMES_F if self.rng.random() < 0.55 else _FIRST_NAMES_M
+        first_names = (
+            FIRST_NAMES_F if self.rng.random() < 0.55 else FIRST_NAMES_M
+        )
         first = self.rng.choice(first_names)
-        last = self.rng.choice(_LAST_NAMES)
+        last = self.rng.choice(LAST_NAMES)
         abbr = _make_abbreviation(last, self._used_abbreviations)
 
         tc = self.config.teachers
@@ -413,6 +416,14 @@ class FakeDataGenerator:
 
     # ─── Kopplungen ───────────────────────────────────────────────────────────
 
+    def generate_classes(self) -> list[SchoolClass]:
+        """Klassen laut Konfiguration und Stundentafel (ohne Zufall)."""
+        return self._generate_classes()
+
+    def generate_rooms(self) -> list[Room]:
+        """Fachräume laut Konfiguration (ohne Zufall)."""
+        return self._generate_rooms()
+
     def generate_couplings(self) -> list[Coupling]:
         """Kopplungen laut Konfiguration (deterministisch, ohne Zufall)."""
         return self._generate_couplings(self._generate_classes())
@@ -457,31 +468,14 @@ class FakeDataGenerator:
                     school_class.grade, []
                 ).append(school_class.id)
 
-        bands: list[Coupling] = []
-        for grade, class_ids in sorted(classes_by_grade.items()):
-            hours = hours_by_grade[grade]
-            group_count = max(len(class_ids), len(languages))
-            groups = [
-                CouplingGroup(
-                    group_name=(
-                        f"{languages[index % len(languages)]} "
-                        f"{index // len(languages) + 1}"
-                    ),
-                    subject=languages[index % len(languages)],
-                    hours_per_week=hours,
-                )
-                for index in range(group_count)
-            ]
-            bands.append(Coupling(
-                id=f"fs2_{grade}",
-                coupling_type=COUPLING_TYPE_BAND,
-                involved_class_ids=class_ids,
-                groups=groups,
-                hours_per_week=hours,
-                cross_class=True,
-                curriculum_subject=SECOND_LANGUAGE_SUBJECT,
-            ))
-        return bands
+        kinds = [(language, language) for language in languages]
+        return [
+            parallel_coupling(
+                f"fs2_{grade}", COUPLING_TYPE_BAND, class_ids, kinds,
+                hours_by_grade[grade], SECOND_LANGUAGE_SUBJECT,
+            )
+            for grade, class_ids in sorted(classes_by_grade.items())
+        ]
 
     def _generate_reli_couplings(self, classes: list[SchoolClass], cc) -> list[Coupling]:
         """Eine Reli/Ethik-Kopplung pro Jahrgang über alle Parallelklassen."""
@@ -491,10 +485,11 @@ class FakeDataGenerator:
             by_grade.setdefault(cls.grade, []).append(cls.id)
 
         for grade, class_ids in sorted(by_grade.items()):
-            # Gruppen: alle reli_groups → Fach "Religion" außer Ethik → "Ethik"
+            # Gruppen: alle reli_groups → Fach "Religion"; heißt die Gruppe
+            # wie ein Fach (Ethik, Praktische Philosophie), dann dieses Fach
             groups = []
             for group_name in cc.reli_groups:
-                subject = "Ethik" if group_name.lower() == "ethik" else "Religion"
+                subject = reli_group_subject(group_name)
                 groups.append(CouplingGroup(
                     group_name=group_name,
                     subject=subject,

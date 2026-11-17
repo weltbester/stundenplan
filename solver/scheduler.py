@@ -721,76 +721,90 @@ class ScheduleSolver:
                         self._model.add(sum(vars_) <= capacity)
 
     def _c9_double_lesson_required(self) -> None:
-        """Fächer mit double_required=True dürfen nur in gültigen Doppelstunden-Blöcken stattfinden.
+        """Fächer mit double_required=True laufen als Doppelstunden.
 
         Semantik je nach N (Stunden/Woche):
-          N=1: Einzelstunde erlaubt (Warnung), keine Doppelstunden-Pflicht
-          N=2: exakt 1 Doppelstunde; Slot-7 und andere Single-Slots verboten
-          N=3: 1 Doppelstunde + 1 Einzelstunde an ANDEREM Tag als die Doppelstunde
-          N=4: exakt 2 Doppelstunden; Slot-7 verboten
-          N=5: 2 Doppelstunden + 1 Einzelstunde an anderem Tag
-
-        Immer: Bidirektionale Implication für double-Paare (bs ↔ bs+1).
+          N gerade: nur Doppelstunden in den konfigurierten Blöcken;
+            Einzel-Slots außerhalb der Blöcke (z.B. Slot 7) sind verboten.
+          N ungerade: N // 2 Doppelstunden in den Blöcken und genau eine
+            Einzelstunde in einem beliebigen Slot, aber nicht an einem Tag
+            mit einer Doppelstunde dieses Fachs (N=1: nur die Einzelstunde).
+            Bis Version 1.1 durfte die Einzelstunde nur in einem Slot
+            außerhalb der Blöcke liegen (Slot 7); eine Lehrkraft konnte so
+            höchstens eine solche Stunde pro Tag geben.
         """
-        tg = self.config.time_grid
-
-        double_required_subjects = self._double_required
-
-        # Erste → zweite Slot-Nummer jedes Doppelstunden-Blocks
-        double_pairs: dict[int, int] = {}
-        double_seconds: set[int] = set()
-        for db in tg.double_blocks:
-            if db.slot_second <= tg.sek1_max_slot:
-                double_pairs[db.slot_first] = db.slot_second
-                double_seconds.add(db.slot_second)
-
-        # Slot-Nummern die weder double_start noch double_second sind (z.B. Slot 7)
-        all_slot_numbers = {s.slot_number for s in self.sek1_slots}
-        single_only_slots = all_slot_numbers - set(double_pairs.keys()) - double_seconds
-
-        # Curriculum-Lookup: (class_id, subject) -> hours
-        curriculum: dict[tuple, int] = {}
-        for cls in self.data.classes:
-            for subj, hrs in cls.curriculum.items():
-                curriculum[(cls.id, subj)] = hrs
-
+        curriculum: dict[tuple, int] = {
+            (cls.id, subj): hrs
+            for cls in self.data.classes
+            for subj, hrs in cls.curriculum.items()
+        }
+        lessons: dict[tuple, dict[int, list]] = {}
         for (t, c, s, day, h), var in self._slot.items():
-            if s not in double_required_subjects:
-                continue
+            if s in self._double_required:
+                lessons.setdefault((t, c, s), {}).setdefault(
+                    day, []
+                ).append((h, var))
 
-            n = curriculum.get((c, s), 0)
-            n_rest = n % 2  # 0 = gerade; 1 = ungerade
-
-            if h in self.valid_double_starts:
-                # Erste Hälfte: wenn aktiv, muss zweite Hälfte auch aktiv sein
-                h_next = double_pairs.get(h)
-                if h_next is not None:
-                    next_key = (t, c, s, day, h_next)
-                    if next_key in self._slot:
-                        # var=1 ↔ next_var=1 (Doppelstunden sind immer Paare)
-                        self._model.add_implication(var, self._slot[next_key])
-                        self._model.add_implication(self._slot[next_key], var)
-                    else:
-                        self._model.add(var == 0)
-            elif h in double_seconds:
-                # Zweite Hälfte: wird durch Implication von der ersten Hälfte gesteuert.
-                pass
+        for key, by_day in lessons.items():
+            hours = curriculum.get(key[1:], 0)
+            if hours % 2 == 0:
+                self._c9_even_hours(key, by_day)
             else:
-                # Single-only-Slot (z.B. Slot 7)
-                if n_rest == 0:
-                    # Gerade Stundenzahl: kein Einzelslot benötigt
+                self._c9_odd_hours(key, by_day, hours)
+
+    def _c9_block_pairs(self) -> dict[int, int]:
+        """Erste → zweite Slot-Nummer jedes Doppelstunden-Blocks."""
+        tg = self.config.time_grid
+        return {
+            db.slot_first: db.slot_second
+            for db in tg.double_blocks
+            if db.slot_second <= tg.sek1_max_slot
+        }
+
+    def _c9_even_hours(
+        self, key: tuple, by_day: dict[int, list]
+    ) -> None:
+        """Gerade Stundenzahl: jede Stunde ist Teil eines Blockpaars."""
+        pairs = self._c9_block_pairs()
+        seconds = set(pairs.values())
+        t, c, s = key
+        for day, slot_vars in by_day.items():
+            for h, var in slot_vars:
+                if h in pairs:
+                    partner = self._slot.get((t, c, s, day, pairs[h]))
+                    if partner is None:
+                        self._model.add(var == 0)
+                    else:
+                        self._model.add_implication(var, partner)
+                        self._model.add_implication(partner, var)
+                elif h not in seconds:
                     self._model.add(var == 0)
-                elif n <= 1:
-                    # N=1: nur Einzelstunde möglich, erlaubt
-                    pass
-                else:
-                    # N_rest=1 und N>=3: Einzelstunde erlaubt, aber nicht am selben Tag
-                    # wie eine Doppelstunde dieses Fachs
-                    for bs in self.valid_double_starts:
-                        bs_key = (t, c, s, day, bs)
-                        if bs_key in self._slot:
-                            # slot[bs] + slot[h] <= 1 (am selben Tag)
-                            self._model.add(self._slot[bs_key] + var <= 1)
+
+    def _c9_odd_hours(
+        self, key: tuple, by_day: dict[int, list], hours: int
+    ) -> None:
+        """Ungerade Stundenzahl: N // 2 Doppelstunden plus eine
+        Einzelstunde an einem Tag ohne Doppelstunde.
+
+        Die Doppel-Variablen (C9b) zählen die vollständigen Blockpaare;
+        da C3 die Gesamtzahl festlegt, bleibt genau eine Stunde übrig.
+        """
+        t, c, s = key
+        assign = self._assign.get(key)
+        doubles_by_day: dict[int, list] = {}
+        for (dt, dc, ds, day, _), dvar in self._double.items():
+            if (dt, dc, ds) == key:
+                doubles_by_day.setdefault(day, []).append(dvar)
+        all_doubles = [d for ds_ in doubles_by_day.values() for d in ds_]
+        if assign is not None:
+            self._model.add(sum(all_doubles) == (hours // 2) * assign)
+        for day, slot_vars in by_day.items():
+            day_doubles = doubles_by_day.get(day, [])
+            singles = (
+                sum(var for _, var in slot_vars) - 2 * sum(day_doubles)
+            )
+            for dvar in day_doubles:
+                self._model.add(singles <= 1 - dvar)
 
     def _c9b_double_linkage(self) -> None:
         """Verknüpft double[]-Variablen bidirektional mit den slot[]-Paaren.

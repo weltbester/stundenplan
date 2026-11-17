@@ -137,6 +137,14 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Blatt "Fächer" (bisher eine feste Liste der ersten 20 Fächer).
 - `.gitignore`: echte Personaldaten (`lehrer.txt`, `lehrer.xlsx`),
   die fremde venv `.macpro/` und `.DS_Store` werden ignoriert.
+- **Verhaltensänderung (Solver, C9):** Fächer mit Doppelstunden-Pflicht
+  und ungerader Stundenzahl (z.B. Chemie mit 1 Stunde) bekommen ihre
+  Einzelstunde jetzt in einem beliebigen Slot (nicht an einem Tag mit
+  Doppelstunde dieses Fachs). Bisher war nur ein Slot außerhalb der
+  Doppelblöcke erlaubt, im Standard-Raster die 7. Stunde; eine Lehrkraft
+  konnte so höchstens fünf solche Stunden pro Woche geben, und eine
+  Sperre der 7. Stunde machte sie unmöglich. Fächer mit gerader
+  Stundenzahl sind unverändert.
 - **Verhaltensänderung:** Die eingebaute Stundentafel ist jetzt die
   NRW-G9-Beispielverteilung. Das betrifft `main.py template` und den
   Import von Mappen ohne Blatt "Stundentafel" (oder ohne Spalte für

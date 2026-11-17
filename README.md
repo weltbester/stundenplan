@@ -525,6 +525,15 @@ drei Stunden desselben Fachs an einem Tag sind möglich. Das frühere Gewicht
 `weight_subject_spread` ist ohne Wirkung und nur noch aus
 Kompatibilitätsgründen in der Konfiguration erlaubt.
 
+**Doppelstunden-Pflicht im Detail** (Fächer mit Doppelstunde `Pflicht`):
+Bei gerader Stundenzahl liegen alle Stunden als Doppelstunden in den
+konfigurierten Blöcken. Bei ungerader Stundenzahl (z.B. Chemie mit
+1 oder 3 Stunden) kommen dazu genau eine Einzelstunde, die in jeder
+Stunde des Tages liegen darf, aber nicht an einem Tag mit einer
+Doppelstunde dieses Fachs. Bis Version 1.1 durfte diese Einzelstunde
+nur außerhalb der Blöcke liegen (im Standard-Raster nur in der
+7. Stunde).
+
 ---
 
 ## Troubleshooting

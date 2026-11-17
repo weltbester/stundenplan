@@ -34,6 +34,11 @@ __version__ = "1.1"
 import sys
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.school_data import SchoolData
+    from solver.pinning import PinnedLesson
 
 try:
     import rich_click as click
@@ -646,6 +651,55 @@ def _parse_weights(s: str) -> dict:
     return result
 
 
+# Dem Stundenplan-Solver bleibt nach Stufe 1 mindestens so viel Zeit.
+_MIN_TIMETABLE_SECONDS = 10
+
+
+def _run_distribution_stage(
+    data: "SchoolData", pins: "list[PinnedLesson]"
+) -> "tuple[SchoolData, bool]":
+    """Stufe 1: ergänzt die Unterrichtsverteilung, falls sie Lücken hat.
+
+    Gibt (Datensatz, True) zurück, wenn eine Verteilung berechnet wurde,
+    sonst den unveränderten Datensatz und False. Die verbrauchte Zeit
+    wird vom Zeitlimit des Stundenplan-Solvers abgezogen.
+    """
+    from solver.distribution import (
+        DistributionError, describe_distribution, distribute_teachers,
+        distribution_time_limit, forced_by_pins, is_distribution_complete,
+    )
+
+    if is_distribution_complete(data):
+        return data, False
+
+    total_limit = data.config.solver.time_limit_seconds
+    stage_limit = distribution_time_limit(total_limit)
+    console.print(
+        f"[bold]Stufe 1: Unterrichtsverteilung[/bold] "
+        f"(Zeitlimit: {stage_limit:.0f}s)"
+    )
+    try:
+        with console.status("[bold green]Verteilung wird berechnet..."):
+            result = distribute_teachers(
+                data, stage_limit,
+                num_workers=data.config.solver.num_workers,
+                forced=forced_by_pins(pins, data),
+            )
+    except DistributionError as error:
+        console.print(
+            f"[red bold]{error}[/red bold]\n"
+            "Mit [bold]--single-stage[/bold] rechnet der Solver "
+            "Verteilung und Plan in einem Schritt."
+        )
+        sys.exit(1)
+
+    console.print(f"[green]✓[/green] {describe_distribution(result)}\n")
+    result.data.config.solver.time_limit_seconds = max(
+        _MIN_TIMETABLE_SECONDS, round(total_limit - result.seconds)
+    )
+    return result.data, True
+
+
 @click.command("solve")
 @click.option("--time-limit", default=None, type=int,
               help="Zeitlimit in Sekunden (überschreibt Config).")
@@ -665,8 +719,11 @@ def _parse_weights(s: str) -> dict:
               help="Nur harte Constraints (keine Soft-Optimierung).")
 @click.option("--weights", default=None,
               help="Gewichte überschreiben, z.B. 'gaps=200,double_lessons=50'.")
+@click.option("--single-stage", is_flag=True, default=False,
+              help="Unterrichtsverteilung und Stundenplan in einem Schritt "
+                   "rechnen (früheres Verhalten).")
 def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose,
-              no_soft, weights):
+              no_soft, weights, single_stage):
     """[bold]Berechnet den Stundenplan[/bold] mit Google OR-Tools CP-SAT.
 
     Standardmäßig werden harte Constraints gelöst und anschließend
@@ -728,6 +785,13 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
             console.print(f"[red bold]Ungültige Gewichte:[/red bold] {e}")
             sys.exit(1)
 
+    # ── Stufe 1: Unterrichtsverteilung ───────────────────────────────────────
+    distribution_generated = False
+    if not single_stage:
+        data, distribution_generated = _run_distribution_stage(
+            data, pin_manager.get_pins()
+        )
+
     # ── Solver starten ───────────────────────────────────────────────────────
     use_soft = not no_soft
     soft_label = "mit Soft-Constraints" if use_soft else "nur harte Constraints"
@@ -766,6 +830,13 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
     ))
 
     if solution.solver_status not in ("OPTIMAL", "FEASIBLE"):
+        if distribution_generated:
+            console.print(
+                "[yellow]Für die automatisch berechnete "
+                "Unterrichtsverteilung wurde kein Stundenplan gefunden. "
+                "[bold]--single-stage[/bold] rechnet Verteilung und Plan "
+                "in einem Schritt (langsamer).[/yellow]"
+            )
         if diagnose:
             from solver.constraint_relaxer import ConstraintRelaxer
             console.print("\n[bold yellow]Starte ConstraintRelaxer-Diagnose...[/bold yellow]")

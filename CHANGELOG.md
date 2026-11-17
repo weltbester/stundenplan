@@ -38,6 +38,12 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Machbarkeits-Check und `template --from-data` richten sich nach der
   Fächerliste des Datensatzes; Mappen ohne das Blatt und ältere
   JSON-Dateien funktionieren weiter.
+- `solve` rechnet in zwei Stufen: Fehlt die Unterrichtsverteilung
+  ganz oder teilweise, entscheidet zuerst ein kleines Modell ohne
+  Zeitdimension, wer was unterrichtet (möglichst nah am Soll-Deputat;
+  Vorgaben und gepinnte Stunden bleiben erhalten), danach entsteht der
+  Stundenplan mit dieser Verteilung (`solver/distribution.py`).
+  `--single-stage` rechnet wie bisher alles in einem Schritt.
 - Soll-Deputat je Lehrkraft (`deputat_soll`), auch mit halben Stunden:
   die Spalte "Deputat" nimmt `25,5` an. Die ganzzahligen Grenzen für
   den Solver werden daraus abgeleitet (aufgerundet + Puffer nach oben;
@@ -75,6 +81,9 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   (`solver/time_budget.py`).
 - Benchmark: "Spätgewinn %" bezieht sich auf die Optimierungszeit
   statt auf das ganze Zeitlimit.
+- Benchmark: Die Verteilung für `loose-36-fixed` kommt aus derselben
+  Stufe 1 (ohne Soll-Ziel, fester Seed); die Datensätze sind
+  unverändert.
 - Solver-Ziel "Deputat": bestraft jetzt den Abstand jeder Lehrkraft
   von ihrem Soll (quadratisch, in halben Stunden). Der bisherige Term
   (Summe aus Obergrenze minus Ist) war für jeden Plan gleich groß und

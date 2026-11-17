@@ -108,7 +108,23 @@ python main.py solve --time-limit 120  # Zeitlimit in Sekunden
 python main.py solve --diagnose        # Bei INFEASIBLE: Ursachen ermitteln
 python main.py solve --weights gaps=200,double_lessons=80  # Gewichte anpassen
 python main.py solve --verbose         # Solver-Fortschritt anzeigen
+python main.py solve --single-stage    # Verteilung und Plan in einem Schritt
 ```
+
+`solve` rechnet in zwei Stufen:
+
+1. **Unterrichtsverteilung** (nur wenn sie Lücken hat): Ein kleines
+   Modell ohne Zeitdimension entscheidet, wer welches Fach in welcher
+   Klasse und welche Kopplungsgruppe übernimmt, möglichst nah am
+   Soll-Deputat jeder Lehrkraft. Vorgaben aus dem Blatt
+   *Unterrichtsverteilung*, Lehrkräfte von Kopplungsgruppen und
+   gepinnte Stunden bleiben erhalten.
+2. **Stundenplan**: Der Plan wird mit dieser Verteilung gerechnet.
+
+Ist die Verteilung vollständig vorgegeben, entfällt Stufe 1. Stufe 1
+bekommt höchstens ein Fünftel des Zeitlimits (maximal 60 s). Sie kennt
+keine Zeiten: findet Stufe 2 für die berechnete Verteilung keinen Plan,
+rechnet `--single-stage` beides in einem Schritt (deutlich langsamer).
 
 Das Zeitlimit gilt für den ganzen Lauf: Modellaufbau, Warm-Start
 (erste gültige Lösung) und Optimierung teilen sich die Zeit. Der

@@ -6,14 +6,26 @@ Lehrkraft welches Fach in welcher Klasse und welche Kopplungsgruppe
 gebliebene werden so verteilt, dass jede Lehrkraft möglichst nah an
 ihrem Soll-Deputat liegt. Der Stundenplan (Stufe 2) wird danach mit
 dieser Verteilung gerechnet.
+
+Das Modell kennt keine Stundenzeiten, prüft aber zwei notwendige
+Bedingungen aus den Sperrzeiten, ohne die Stufe 2 sicher scheitert:
+- Tagesbeginn: Jede Klasse hat an jedem Tag die Stunden 1..k (C10, k
+  aus ihren Wochenstunden). In jeder dieser Stunden ist mindestens eine
+  ihrer Lehrkräfte frei, oder eine ihrer Kopplungen, deren gewählte
+  Lehrkräfte alle frei sind.
+- Kopplungen: Die gewählten Lehrkräfte einer Kopplung haben genug
+  gemeinsame freie Stunden, mit C15 verteilt auf genug Tage (je Tag
+  eine Stunde oder ein Doppelblock).
 """
 
 import time
+from itertools import product
 from typing import Optional
 
 from ortools.sat.python import cp_model
 from pydantic import BaseModel
 
+from config.schema import TimeGridConfig
 from models.coupling import Coupling
 from models.fixed_assignment import (
     FixedAssignment, coupling_subjects_by_class,
@@ -34,6 +46,8 @@ DISTRIBUTION_MIN_SECONDS = 5.0
 ClassSubject = tuple[str, str]            # (Klasse, Fach)
 ClassSubjectKey = tuple[str, str, str]    # (Lehrkraft, Klasse, Fach)
 GroupKey = tuple[str, int, str]           # (Kopplung, Gruppenindex, Lehrkraft)
+Slot = tuple[int, int]                    # (Tag, Stunde)
+CouplingSlotKey = tuple[str, int, int]    # (Kopplung, Tag, Stunde)
 
 
 class DistributionError(RuntimeError):
@@ -89,6 +103,62 @@ def distribution_time_limit(total_seconds: float) -> float:
     )
 
 
+def sek1_slot_numbers(time_grid: TimeGridConfig) -> list[int]:
+    """Stunden des Sek-I-Rasters, aufsteigend (wie im Stundenplan-Solver)."""
+    return sorted(
+        slot.slot_number
+        for slot in time_grid.lesson_slots
+        if not slot.is_sek2_only
+        and slot.slot_number <= time_grid.sek1_max_slot
+    )
+
+
+def double_block_pairs(time_grid: TimeGridConfig) -> list[Slot]:
+    """Doppelblöcke (erste, zweite Stunde), die ganz im Sek-I-Raster liegen."""
+    slot_numbers = set(sek1_slot_numbers(time_grid))
+    return [
+        (block.slot_first, block.slot_second)
+        for block in time_grid.double_blocks
+        if {block.slot_first, block.slot_second} <= slot_numbers
+    ]
+
+
+def weekly_class_lessons(data: SchoolData) -> dict[str, int]:
+    """Klasse → Wochenstunden, die der Stundenplan für sie einplant.
+
+    Fächer außerhalb von Kopplungen laut Stundentafel, dazu die
+    Stunden jeder Kopplung, an der die Klasse beteiligt ist.
+    """
+    covered = coupling_subjects_by_class(data.couplings)
+    lessons = {
+        school_class.id: sum(
+            hours
+            for subject, hours in school_class.curriculum.items()
+            if hours > 0
+            and subject not in covered.get(school_class.id, set())
+        )
+        for school_class in data.classes
+    }
+    for coupling in data.couplings:
+        for class_id in coupling.involved_class_ids:
+            if class_id in lessons:
+                lessons[class_id] += coupling.hours_per_week
+    return lessons
+
+
+def lessons_every_day(
+    weekly_lessons: int, days: int, slots_per_day: int
+) -> int:
+    """Wie viele Stunden ab der ersten eine Klasse an JEDEM Tag hat.
+
+    Ein Tag hat höchstens `slots_per_day` Stunden und beginnt ohne Lücke
+    in der ersten (C10). Die übrigen Tage nehmen zusammen höchstens
+    `(days - 1) * slots_per_day` Stunden auf; der Rest fällt auf den
+    kürzesten Tag. 0 heißt: ein freier Tag wäre möglich.
+    """
+    return max(0, weekly_lessons - (days - 1) * slots_per_day)
+
+
 def forced_by_pins(
     pins: list[PinnedLesson], data: SchoolData
 ) -> dict[ClassSubject, str]:
@@ -128,10 +198,28 @@ class _DistributionModel:
         self.class_vars: dict[ClassSubjectKey, cp_model.IntVar] = {}
         self.group_vars: dict[GroupKey, cp_model.IntVar] = {}
         self.loads: dict[str, cp_model.LinearExprT] = {}
+        # 1, wenn alle gewählten Lehrkräfte der Kopplung frei sind
+        self.coupling_free: dict[CouplingSlotKey, cp_model.IntVar] = {}
+
+        time_grid = data.config.time_grid
+        self._slot_numbers = sek1_slot_numbers(time_grid)
+        self._slots: list[Slot] = list(
+            product(range(time_grid.days_per_week), self._slot_numbers)
+        )
+        self._blocked_at: dict[Slot, set[str]] = {
+            slot: set() for slot in self._slots
+        }
+        for teacher in data.teachers:
+            for slot in teacher.unavailable_slots:
+                if tuple(slot) in self._blocked_at:
+                    self._blocked_at[tuple(slot)].add(teacher.id)
 
         self._add_class_subject_vars()
         self._add_coupling_group_vars()
         self._add_deputat_bounds()
+        self._add_coupling_free_vars()
+        self._add_class_day_start()
+        self._add_coupling_capacity()
 
     def _candidates(
         self, subject: str, given_teacher: Optional[str]
@@ -217,6 +305,114 @@ class _DistributionModel:
             self.model.add(load >= teacher.deputat_min)
             self.model.add(load <= upper)
 
+    def _add_coupling_free_vars(self) -> None:
+        """coupling_free[k, Tag, Stunde] → keine gewählte Lehrkraft ist
+        in dieser Stunde gesperrt."""
+        candidates: dict[str, list[tuple[str, cp_model.IntVar]]] = {}
+        for (coupling_id, _, teacher_id), var in self.group_vars.items():
+            candidates.setdefault(coupling_id, []).append((teacher_id, var))
+        for coupling in self.data.couplings:
+            for day, hour in self._slots:
+                free = self.model.new_bool_var(
+                    f"free_{coupling.id}_{day}_{hour}"
+                )
+                blocked = self._blocked_at[(day, hour)]
+                for teacher_id, var in candidates.get(coupling.id, []):
+                    if teacher_id in blocked:
+                        self.model.add_implication(free, var.negated())
+                self.coupling_free[(coupling.id, day, hour)] = free
+
+    def _add_class_day_start(self) -> None:
+        """In den Stunden 1..k jedes Tages kann die Klasse Unterricht haben.
+
+        k aus `lessons_every_day`. Ist keine Lehrkraft der Klasse frei und
+        keine ihrer Kopplungen möglich, scheitert Stufe 2 an C10.
+        """
+        time_grid = self.data.config.time_grid
+        weekly = weekly_class_lessons(self.data)
+        teacher_vars: dict[str, list[tuple[str, cp_model.IntVar]]] = {}
+        for (teacher_id, class_id, _), var in self.class_vars.items():
+            teacher_vars.setdefault(class_id, []).append((teacher_id, var))
+        couplings_of: dict[str, list[str]] = {}
+        for coupling in self.data.couplings:
+            for class_id in coupling.involved_class_ids:
+                couplings_of.setdefault(class_id, []).append(coupling.id)
+
+        for school_class in self.data.classes:
+            first = lessons_every_day(
+                weekly[school_class.id],
+                time_grid.days_per_week,
+                len(self._slot_numbers),
+            )
+            starts = product(
+                range(time_grid.days_per_week), self._slot_numbers[:first]
+            )
+            for day, hour in starts:
+                blocked = self._blocked_at[(day, hour)]
+                options = [
+                    var
+                    for teacher_id, var in teacher_vars.get(
+                        school_class.id, []
+                    )
+                    if teacher_id not in blocked
+                ] + [
+                    self.coupling_free[(coupling_id, day, hour)]
+                    for coupling_id in couplings_of.get(school_class.id, [])
+                ]
+                self.model.add_bool_or(options)
+
+    def _add_coupling_capacity(self) -> None:
+        """Genug gemeinsame freie Stunden für die Stunden jeder Kopplung.
+
+        Ohne C15 zählt jede freie Stunde. Mit C15 liegt je Tag eine
+        Stunde oder ein Doppelblock, also höchstens zwei Stunden.
+        """
+        time_grid = self.data.config.time_grid
+        day_limit = self.data.config.solver.subject_day_limit
+        pairs = double_block_pairs(time_grid)
+        for coupling in self.data.couplings:
+            if day_limit:
+                capacity = sum(
+                    self._coupling_day_capacity(coupling.id, day, pairs)
+                    for day in range(time_grid.days_per_week)
+                )
+            else:
+                capacity = sum(
+                    self.coupling_free[(coupling.id, day, hour)]
+                    for day, hour in self._slots
+                )
+            self.model.add(capacity >= coupling.hours_per_week)
+
+    def _coupling_day_capacity(
+        self, coupling_id: str, day: int, pairs: list[Slot]
+    ) -> cp_model.LinearExprT:
+        """Stunden der Kopplung an einem Tag mit C15: 0, 1 oder 2.
+
+        Eine Stunde, wenn eine Stunde frei ist; eine zweite nur, wenn
+        beide Stunden eines Doppelblocks frei sind.
+        """
+        single = self.model.new_bool_var(f"single_{coupling_id}_{day}")
+        self.model.add_bool_or([
+            self.coupling_free[(coupling_id, day, hour)]
+            for hour in self._slot_numbers
+        ]).only_enforce_if(single)
+        if not pairs:
+            return single
+
+        double = self.model.new_bool_var(f"double_{coupling_id}_{day}")
+        both_free = []
+        for first, second in pairs:
+            both = self.model.new_bool_var(
+                f"both_{coupling_id}_{day}_{first}"
+            )
+            for hour in (first, second):
+                self.model.add_implication(
+                    both, self.coupling_free[(coupling_id, day, hour)]
+                )
+            both_free.append(both)
+        self.model.add_bool_or(both_free).only_enforce_if(double)
+        return single + double
+
     def add_target_objective(self) -> None:
         """Minimiert die quadrierten Abstände vom Soll (halbe Stunden)."""
         max_buffer = self.data.config.teachers.deputat_max_buffer
@@ -295,7 +491,9 @@ def distribute_teachers(
     if status not in SOLVED_STATUSES:
         raise DistributionError(
             f"Keine Unterrichtsverteilung gefunden "
-            f"(Status {solver.status_name(status)})."
+            f"(Status {solver.status_name(status)}). Mögliche Gründe: "
+            f"Deputatgrenzen, fehlende Fachlehrkräfte oder Sperrzeiten, "
+            f"in denen eine Klasse oder Kopplung keine freie Lehrkraft hat."
         )
 
     fixed = [

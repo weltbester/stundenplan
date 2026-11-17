@@ -199,6 +199,13 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   (36-Klassen-Plan: 48 Fehler). Parallele Gruppen derselben Kopplung
   gelten nicht mehr als Klassen-Doppelbelegung, und WPF-Termine zählen
   für das Stundentafel-Fach "WPF".
+- Stufe 1 (Unterrichtsverteilung) beachtet die Sperrzeiten: Jede Klasse
+  hat in den Stunden, die sie an jedem Tag braucht (ab der ersten), eine
+  freie Lehrkraft oder eine mögliche Kopplung, und die Lehrkräfte einer
+  Kopplung haben genug gemeinsame freie Stunden (mit C15 je Tag eine
+  Stunde oder ein Doppelblock). Bisher konnte Stufe 1 z.B. alle
+  Lehrkräfte einer Klasse aus derselben Oberstufen-Schiene wählen; der
+  Stundenplan war dann unlösbar (INFEASIBLE).
 
 ### Removed
 - `.DS_Store` aus der Versionsverwaltung entfernt (Datei bleibt lokal).

@@ -148,9 +148,13 @@ python main.py solve --single-stage    # Verteilung und Plan in einem Schritt
 2. **Stundenplan**: Der Plan wird mit dieser Verteilung gerechnet.
 
 Ist die Verteilung vollständig vorgegeben, entfällt Stufe 1. Stufe 1
-bekommt höchstens ein Fünftel des Zeitlimits (maximal 60 s). Sie kennt
-keine Zeiten: findet Stufe 2 für die berechnete Verteilung keinen Plan,
-rechnet `--single-stage` beides in einem Schritt (deutlich langsamer).
+bekommt höchstens ein Fünftel des Zeitlimits (maximal 60 s). Sie legt
+keine Zeiten fest, prüft aber zwei Bedingungen aus den Sperrzeiten:
+Jede Klasse hat in den Stunden, die sie an jedem Tag braucht, eine
+freie Lehrkraft (oder eine mögliche Kopplung), und die Lehrkräfte einer
+Kopplung haben genug gemeinsame freie Stunden. Findet Stufe 2 für die
+berechnete Verteilung trotzdem keinen Plan, rechnet `--single-stage`
+beides in einem Schritt (deutlich langsamer).
 
 Das Zeitlimit gilt für den ganzen Lauf: Modellaufbau, Warm-Start
 (erste gültige Lösung) und Optimierung teilen sich die Zeit. Der

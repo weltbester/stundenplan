@@ -10,8 +10,9 @@ from models.school_data import SchoolData
 from solver.distribution import (
     DISTRIBUTION_MAX_SECONDS, DISTRIBUTION_MIN_SECONDS, DistributionError,
     DistributionResult, describe_distribution, distribute_teachers,
-    distribution_time_limit, forced_by_pins, is_distribution_complete,
-    open_class_subjects, open_coupling_groups,
+    distribution_time_limit, double_block_pairs, forced_by_pins,
+    is_distribution_complete, lessons_every_day, open_class_subjects,
+    open_coupling_groups, sek1_slot_numbers, weekly_class_lessons,
 )
 from solver.pinning import PinnedLesson
 from solver.scheduler import ScheduleSolver
@@ -22,6 +23,18 @@ MAX_BUFFER = 6
 FLEXIBLE_TEACHER = "T10"
 LOW_TARGET = 4.0
 HIGH_TARGET = 9.0
+DAYS = 5
+SLOTS_PER_DAY = 7
+MONDAY = 0
+TUESDAY = 1
+# 7a hat 34 Stunden: an jedem Tag die Stunden 1..6
+FULL_CLASS = "7a"
+FULL_CLASS_LESSONS = 34
+# 5a hat 28 Stunden: ein freier Tag wäre möglich
+SHORT_CLASS = "5a"
+SPARE_TEACHER = "T11"
+SPARE_HOURS = 4
+RELI_TEACHERS = ("T08", "T09")
 
 
 def _distribute(data: SchoolData, **options: object) -> DistributionResult:
@@ -35,6 +48,50 @@ def _with_target(data: SchoolData, teacher_id: str, target: float):
         for t in data.teachers
     ]
     return data.model_copy(update={"teachers": teachers})
+
+
+def _with_blocks(
+    data: SchoolData, blocks: dict[str, list[tuple[int, int]]]
+) -> SchoolData:
+    """Kopie mit den Sperrzeiten aus `blocks` (Lehrkraft → Slots)."""
+    teachers = [
+        t.model_copy(update={"unavailable_slots": blocks[t.id]})
+        if t.id in blocks else t
+        for t in data.teachers
+    ]
+    return data.model_copy(update={"teachers": teachers})
+
+
+def _free_only(free: set[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Sperrzeiten einer Lehrkraft, die nur in `free` unterrichten kann."""
+    return [
+        (day, hour)
+        for day in range(DAYS)
+        for hour in range(1, SLOTS_PER_DAY + 1)
+        if (day, hour) not in free
+    ]
+
+
+def _whole_day(day: int) -> set[tuple[int, int]]:
+    return {(day, hour) for hour in range(1, SLOTS_PER_DAY + 1)}
+
+
+def _reli_teachers_free(
+    first: set[tuple[int, int]], second: set[tuple[int, int]],
+    subject_day_limit: bool = True,
+) -> SchoolData:
+    """Mini-Daten, in denen nur T08/T09 Religion/Ethik unterrichten
+    können: T08 nur in `first`, T09 nur in `second`."""
+    data = make_mini_school_data()
+    solver_config = data.config.solver.model_copy(
+        update={"subject_day_limit": subject_day_limit}
+    )
+    config = data.config.model_copy(update={"solver": solver_config})
+    data = data.model_copy(update={"config": config})
+    first_id, second_id = RELI_TEACHERS
+    return _with_blocks(data, {
+        first_id: _free_only(first), second_id: _free_only(second),
+    })
 
 
 def _teacher_of(data: SchoolData, class_id: str, subject: str) -> str:
@@ -286,3 +343,138 @@ class TestTwoStages:
         assert result.exit_code == 0, result.output
         assert "Stufe 1" not in result.output
         assert output.exists()
+
+
+class TestTimeHelpers:
+
+    def test_default_grid_has_seven_sek1_lessons(self):
+        grid = make_mini_school_data().config.time_grid
+        assert sek1_slot_numbers(grid) == list(range(1, SLOTS_PER_DAY + 1))
+
+    def test_double_blocks_inside_sek1(self):
+        grid = make_mini_school_data().config.time_grid
+        assert double_block_pairs(grid) == [(1, 2), (3, 4), (5, 6)]
+
+    def test_weekly_lessons_include_couplings(self):
+        data = make_mini_school_data()
+        assert weekly_class_lessons(data)[FULL_CLASS] == FULL_CLASS_LESSONS
+
+    def test_lessons_every_day(self):
+        assert lessons_every_day(34, DAYS, SLOTS_PER_DAY) == 6
+        assert lessons_every_day(32, DAYS, SLOTS_PER_DAY) == 4
+        assert lessons_every_day(28, DAYS, SLOTS_PER_DAY) == 0
+        assert lessons_every_day(20, DAYS, SLOTS_PER_DAY) == 0
+
+
+class TestClassDayStart:
+
+    def test_no_free_teacher_in_first_lesson_is_error(self):
+        data = make_mini_school_data()
+        blocked = _with_blocks(
+            data, {t.id: [(MONDAY, 1)] for t in data.teachers}
+        )
+
+        with pytest.raises(DistributionError, match="Sperrzeiten"):
+            _distribute(blocked)
+
+    def test_only_free_teacher_gets_a_subject_of_the_class(self):
+        # Zusätzliche Englisch-Lehrkraft mit Soll 4: das Ziel allein gäbe
+        # ihr Englisch in 5a (4 Stunden) statt in 7a (3 Stunden).
+        data = make_mini_school_data()
+        spare = data.teachers[0].model_copy(update={
+            "id": SPARE_TEACHER, "name": "Lang, Ute",
+            "subjects": ["Englisch"], "deputat_min": 0,
+            "deputat_max": SPARE_HOURS, "deputat_soll": float(SPARE_HOURS),
+        })
+        data = data.model_copy(update={"teachers": data.teachers + [spare]})
+        blocked = _with_blocks(data, {
+            t.id: [(MONDAY, 1)]
+            for t in data.teachers if t.id != SPARE_TEACHER
+        })
+
+        result = _distribute(blocked)
+
+        assert _teacher_of(result.data, FULL_CLASS, "Englisch") == (
+            SPARE_TEACHER
+        )
+
+    def test_class_with_possible_free_day_is_not_restricted(self):
+        # 5a allein: 28 Stunden passen in vier Tage, Montag darf leer sein
+        data = make_mini_school_data()
+        only_5a = data.model_copy(update={
+            "classes": [c for c in data.classes if c.id == SHORT_CLASS],
+            "couplings": [
+                c for c in data.couplings
+                if c.involved_class_ids == [SHORT_CLASS]
+            ],
+        })
+        teachers = [
+            t.model_copy(update={
+                "deputat_min": 0, "unavailable_slots": [(MONDAY, 1)],
+            })
+            for t in data.teachers
+        ]
+        blocked = only_5a.model_copy(update={"teachers": teachers})
+
+        assert lessons_every_day(
+            weekly_class_lessons(blocked)[SHORT_CLASS], DAYS, SLOTS_PER_DAY
+        ) == 0
+        assert is_distribution_complete(_distribute(blocked).data)
+
+
+class TestCouplingCapacity:
+
+    def test_teachers_without_shared_free_lesson_are_error(self):
+        data = _reli_teachers_free(
+            _whole_day(MONDAY), _whole_day(TUESDAY)
+        )
+
+        with pytest.raises(DistributionError, match="INFEASIBLE"):
+            _distribute(data)
+
+    def test_two_shared_lessons_in_a_double_block_are_enough(self):
+        data = _reli_teachers_free(
+            _whole_day(MONDAY), {(MONDAY, 1), (MONDAY, 2)}
+            | _whole_day(TUESDAY),
+        )
+        assert is_distribution_complete(_distribute(data).data)
+
+    def test_two_shared_lessons_outside_a_block_break_day_limit(self):
+        data = _reli_teachers_free(
+            _whole_day(MONDAY), {(MONDAY, 2), (MONDAY, 3)}
+            | _whole_day(TUESDAY),
+        )
+
+        with pytest.raises(DistributionError, match="INFEASIBLE"):
+            _distribute(data)
+
+    def test_without_day_limit_any_two_shared_lessons_are_enough(self):
+        data = _reli_teachers_free(
+            _whole_day(MONDAY), {(MONDAY, 2), (MONDAY, 3)}
+            | _whole_day(TUESDAY),
+            subject_day_limit=False,
+        )
+        assert is_distribution_complete(_distribute(data).data)
+
+    def test_chosen_teacher_shares_free_lessons(self):
+        data = _reli_teachers_free(
+            _whole_day(MONDAY), _whole_day(TUESDAY)
+        )
+        third = data.teachers[0].model_copy(update={
+            "id": SPARE_TEACHER, "name": "Lang, Ute",
+            "subjects": ["Religion", "Ethik"], "deputat_min": 0,
+            "unavailable_slots": [],
+        })
+        # T08/T09 dürfen leer ausgehen, sonst erzwingt das Deputat sie
+        teachers = [
+            t.model_copy(update={"deputat_min": 0})
+            if t.id in RELI_TEACHERS else t
+            for t in data.teachers
+        ]
+        data = data.model_copy(update={"teachers": teachers + [third]})
+
+        result = _distribute(data)
+
+        for coupling in result.data.couplings:
+            chosen = {group.teacher_id for group in coupling.groups}
+            assert SPARE_TEACHER in chosen

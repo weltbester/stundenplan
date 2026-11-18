@@ -6,6 +6,10 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 ## [Unreleased]
 
 ### Added
+- Zeitlimit nach Schulgröße: ist `solver.time_limit_seconds` leer (neuer
+  Standard), gilt 12,5 s je Klasse, mindestens 300 s (36 Klassen →
+  450 s). `solve` meldet, wenn ein festes Zeitlimit aus der
+  Konfiguration darunter liegt. Der Wizard nimmt `auto` als Antwort.
 - Machbarkeits-Check: Fehler, wenn in einer Stunde, die jede Klasse an
   jedem Tag hat (der Tag beginnt ohne Lücke in der 1. Stunde), nicht
   jede dieser Klassen gleichzeitig eine eigene freie Lehrkraft
@@ -122,6 +126,8 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Lehrkräfte-Bedarf und Soll-Wochenstunden folgen ihr.
 
 ### Changed
+- Standard für `solver.time_limit_seconds` ist nicht mehr 300, sondern
+  leer (= nach Schulgröße). Gespeicherte Werte bleiben gültig.
 - Benchmark-Leiter: jede Stufe hat ihr eigenes Zeitlimit. `nrw-36` und
   `long-day-36` rechnen 450 s statt 300 s, weil der Solver bei 36
   Klassen nach 300 s noch deutlich verbessert (Spätgewinn bis 6,1 %).

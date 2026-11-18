@@ -5,7 +5,7 @@ Warm-Start und Suche teilen sich dieselbe Uhr.
 """
 
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 # Der Warm-Start bekommt höchstens diesen Anteil der verbleibenden Zeit …
 WARMSTART_SHARE = 1 / 3
@@ -15,7 +15,52 @@ MAX_WARMSTART_SECONDS = 90.0
 # wenn der Modellaufbau das Zeitlimit schon (fast) aufgebraucht hat.
 MIN_PHASE_SECONDS = 5.0
 
+# Zeitlimit "nach Schulgröße" (Feld time_limit_seconds leer): Sekunden
+# je Klasse, nie weniger als die Untergrenze. Gemessen (Benchmark-Leiter
+# 2026-11-18): 18 und 30 Klassen bestehen mit 300 s, 36 Klassen brauchen
+# 450 s.
+SECONDS_PER_CLASS = 12.5
+MIN_AUTO_LIMIT_SECONDS = 300
+# Obergrenze, gleich dem Maximum von SolverConfig.time_limit_seconds.
+MAX_LIMIT_SECONDS = 3600
+
 Clock = Callable[[], float]
+
+
+def recommended_time_limit(num_classes: int) -> int:
+    """Zeitlimit in Sekunden für eine Schule mit `num_classes` Klassen."""
+    seconds = round(num_classes * SECONDS_PER_CLASS)
+    return min(MAX_LIMIT_SECONDS, max(MIN_AUTO_LIMIT_SECONDS, seconds))
+
+
+def effective_time_limit(configured: Optional[int], num_classes: int) -> int:
+    """Das konfigurierte Zeitlimit, ohne Angabe das nach Schulgröße."""
+    if configured is None:
+        return recommended_time_limit(num_classes)
+    return configured
+
+
+def describe_time_limit(configured: Optional[int]) -> str:
+    """Zeitlimit für die Anzeige: "300s" oder "nach Schulgröße"."""
+    if configured is None:
+        return "nach Schulgröße"
+    return f"{configured}s"
+
+
+def short_time_limit_hint(
+    configured: Optional[int], num_classes: int
+) -> Optional[str]:
+    """Hinweistext, wenn ein festes Zeitlimit unter dem nach Schulgröße
+    liegt; sonst None."""
+    recommended = recommended_time_limit(num_classes)
+    if configured is None or configured >= recommended:
+        return None
+    return (
+        f"Das Zeitlimit {configured}s liegt unter dem Wert für "
+        f"{num_classes} Klassen ({recommended}s); der Plan wird "
+        f"meist schlechter. Abhilfe: --time-limit {recommended} oder "
+        f"time_limit_seconds leer lassen (Zeitlimit nach Schulgröße)."
+    )
 
 
 class TimeBudget:

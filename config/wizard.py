@@ -29,6 +29,7 @@ from config.schema import (
     TimeGridConfig,
 )
 from config.defaults import default_rooms, default_time_grid, default_grades
+from solver.time_budget import describe_time_limit
 
 console = Console()
 
@@ -318,6 +319,34 @@ def _wizard_couplings() -> CouplingConfig:
 
 # ─── SCHRITT 7: Solver ───
 
+AUTO_TIME_LIMIT = "auto"
+
+
+def parse_time_limit(answer: str) -> Optional[int]:
+    """Antwort auf die Zeitlimit-Frage: "auto" → None, sonst Sekunden.
+
+    Raises:
+        ValueError: wenn die Antwort weder "auto" noch eine Zahl ist.
+    """
+    text = answer.strip().lower()
+    if text in ("", AUTO_TIME_LIMIT):
+        return None
+    return int(text)
+
+
+def _ask_time_limit() -> Optional[int]:
+    """Fragt das Zeitlimit; "auto" = nach Schulgröße."""
+    while True:
+        answer = Prompt.ask(
+            f"Zeitlimit (Sekunden, '{AUTO_TIME_LIMIT}' = nach Schulgröße)",
+            default=AUTO_TIME_LIMIT,
+        )
+        try:
+            return parse_time_limit(answer)
+        except ValueError:
+            _warn(f"Bitte eine Zahl oder '{AUTO_TIME_LIMIT}' eingeben.")
+
+
 def _wizard_solver() -> SolverConfig:
     _header("Schritt 7 — Solver-Gewichte")
     _info(
@@ -348,9 +377,7 @@ def _wizard_solver() -> SolverConfig:
         _success("Standard-Solver-Gewichte übernommen.")
         return defaults
 
-    time_limit = IntPrompt.ask(
-        "Zeitlimit (Sekunden)", default=defaults.time_limit_seconds
-    )
+    time_limit = _ask_time_limit()
     workers = IntPrompt.ask(
         "CPU-Kerne (0=automatisch)", default=defaults.num_workers
     )
@@ -406,7 +433,7 @@ def _show_summary(config: SchoolConfig) -> None:
         f"WPF: {'✓' if config.couplings.wpf_enabled else '✗'}"
     )
     table.add_row("Solver-Zeitlimit",
-                  f"{config.solver.time_limit_seconds}s")
+                  describe_time_limit(config.solver.time_limit_seconds))
     console.print(table)
 
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from models.school_data import SchoolData
 from solver.pinning import PinnedLesson
+from solver.time_budget import effective_time_limit
 
 logger = logging.getLogger(__name__)
 
@@ -296,7 +297,10 @@ class ConstraintRelaxer:
         try:
             # Zeitlimit setzen
             modified_data = data
-            if data.config.solver.time_limit_seconds > time_limit:
+            configured = effective_time_limit(
+                data.config.solver.time_limit_seconds, len(data.classes)
+            )
+            if configured > time_limit:
                 new_config = data.config.model_copy(deep=True)
                 new_config.solver.time_limit_seconds = time_limit
                 new_config.solver.num_workers = 2

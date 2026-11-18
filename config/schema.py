@@ -283,9 +283,10 @@ class CouplingConfig(BaseModel):
 
 class SolverConfig(BaseModel):
     """Solver-Konfiguration und Optimierungsgewichte."""
-    # Zeitlimit für den Solver in Sekunden
-    time_limit_seconds: int = Field(300, ge=30, le=3600,
-        description="Zeitlimit Solver (Sekunden)")
+    # Zeitlimit für den ganzen Lauf in Sekunden. Leer (None) = nach
+    # Schulgröße, siehe solver/time_budget.py recommended_time_limit.
+    time_limit_seconds: Optional[int] = Field(None, ge=30, le=3600,
+        description="Zeitlimit Solver (Sekunden, leer = nach Schulgröße)")
     # Anzahl CPU-Kerne (0 = automatisch alle nutzen)
     num_workers: int = Field(0, ge=0,
         description="CPU-Kerne (0=automatisch)")

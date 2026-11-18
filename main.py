@@ -283,6 +283,8 @@ def cmd_config():
 @cmd_config.command("show")
 def config_show():
     """Zeigt die aktuelle Konfiguration an."""
+    from solver.time_budget import describe_time_limit
+
     mgr, config = _load_config_or_abort()
 
     console.print(Panel(
@@ -320,7 +322,8 @@ def config_show():
 
     sc = config.solver
     console.print(
-        f"[bold]Solver:[/bold] Zeitlimit {sc.time_limit_seconds}s | "
+        f"[bold]Solver:[/bold] Zeitlimit "
+        f"{describe_time_limit(sc.time_limit_seconds)} | "
         f"Gewicht Springstunden: {sc.weight_gaps}"
     )
 
@@ -713,6 +716,33 @@ def _run_distribution_stage(
     return result.data, True
 
 
+def _resolve_time_limit(data: "SchoolData") -> None:
+    """Setzt ein leeres Zeitlimit auf den Wert nach Schulgröße.
+
+    Ein festes Zeitlimit bleibt; liegt es darunter, folgt ein Hinweis.
+    """
+    from solver.time_budget import (
+        recommended_time_limit, short_time_limit_hint,
+    )
+
+    solver_config = data.config.solver
+    num_classes = len(data.classes)
+    if solver_config.time_limit_seconds is None:
+        solver_config.time_limit_seconds = recommended_time_limit(
+            num_classes
+        )
+        console.print(
+            f"[dim]Zeitlimit nach Schulgröße ({num_classes} Klassen): "
+            f"{solver_config.time_limit_seconds}s[/dim]"
+        )
+        return
+    hint = short_time_limit_hint(
+        solver_config.time_limit_seconds, num_classes
+    )
+    if hint:
+        console.print(f"[yellow]Hinweis: {hint}[/yellow]")
+
+
 @click.command("solve")
 @click.option("--time-limit", default=None, type=int,
               help="Zeitlimit in Sekunden (überschreibt Config).")
@@ -778,8 +808,11 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
         report.print_rich()
 
     # ── Zeitlimit anpassen ───────────────────────────────────────────────────
+    # Mini-Modus: festes kurzes Limit, ohne Hinweis.
     if time_limit is not None:
         data.config.solver.time_limit_seconds = time_limit
+    elif not small:
+        _resolve_time_limit(data)
 
     # ── Pins laden ───────────────────────────────────────────────────────────
     pin_manager = PinManager()

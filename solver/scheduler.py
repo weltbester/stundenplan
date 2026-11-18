@@ -25,7 +25,7 @@ from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
 from models.school_class import SchoolClass
 from models.coupling import Coupling
 from solver.pinning import PinnedLesson
-from solver.time_budget import TimeBudget
+from solver.time_budget import TimeBudget, effective_time_limit
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +206,9 @@ class ScheduleSolver:
         self._pinned_lessons = list(pins)
 
         # Das Zeitlimit gilt für den ganzen Lauf (Aufbau, Warm-Start, Suche).
-        budget = TimeBudget(self.config.solver.time_limit_seconds)
+        budget = TimeBudget(effective_time_limit(
+            self.config.solver.time_limit_seconds, len(self.data.classes)
+        ))
 
         self._build_slot_index()
         self._build_coupling_coverage()

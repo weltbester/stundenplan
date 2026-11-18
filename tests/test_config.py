@@ -24,6 +24,7 @@ from config.defaults import (
     SUBJECT_METADATA,
 )
 from config.manager import ConfigManager
+from config.wizard import parse_time_limit
 
 
 # ─── DEFAULT-KONFIGURATION ────────────────────────────────────────────────────
@@ -217,6 +218,31 @@ class TestConfigManager:
         mgr.save_scenario(config, "test_szenario", "Nur zum Testen")
         loaded = mgr.load_scenario("test_szenario")
         assert loaded.school_name == "Test-Schule"
+
+    def test_empty_time_limit_survives_roundtrip(self, tmp_path: Path):
+        """Ohne festes Zeitlimit bleibt das Feld nach Speichern leer."""
+        config = default_school_config()
+        mgr = ConfigManager()
+        mgr.CONFIG_DIR = tmp_path
+        mgr.DEFAULT_CONFIG = tmp_path / "school_config.yaml"
+
+        mgr.save(config)
+        loaded = mgr.load(mgr.DEFAULT_CONFIG)
+
+        assert config.solver.time_limit_seconds is None
+        assert loaded.solver.time_limit_seconds is None
+
+    def test_stored_time_limit_is_kept(self, tmp_path: Path):
+        """Eine YAML mit festem Zeitlimit (z.B. 300) lädt unverändert."""
+        config = default_school_config()
+        config.solver.time_limit_seconds = 300
+        mgr = ConfigManager()
+        mgr.CONFIG_DIR = tmp_path
+        mgr.DEFAULT_CONFIG = tmp_path / "school_config.yaml"
+
+        mgr.save(config)
+
+        assert mgr.load(mgr.DEFAULT_CONFIG).solver.time_limit_seconds == 300
 
     def test_list_scenarios_empty(self, tmp_path: Path):
         """Leeres Szenario-Verzeichnis → leere Liste."""
@@ -641,3 +667,20 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(cli, ["scenario", "list"])
         assert result.exit_code == 0
+
+
+# ─── WIZARD: ZEITLIMIT ────────────────────────────────────────────────────────
+
+class TestWizardTimeLimit:
+    """Antwort auf die Zeitlimit-Frage im Wizard."""
+
+    @pytest.mark.parametrize("answer", ["auto", " AUTO ", ""])
+    def test_auto_means_school_size(self, answer: str):
+        assert parse_time_limit(answer) is None
+
+    def test_number_is_a_fixed_limit(self):
+        assert parse_time_limit("450") == 450
+
+    def test_other_text_is_rejected(self):
+        with pytest.raises(ValueError):
+            parse_time_limit("lang")

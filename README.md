@@ -169,6 +169,17 @@ Das Zeitlimit gilt für den ganzen Lauf: Modellaufbau, Warm-Start
 Warm-Start bekommt höchstens ein Drittel der Zeit nach dem Aufbau
 (maximal 90 s), die Optimierung den Rest.
 
+Ohne festes Zeitlimit (`time_limit_seconds` leer, Standard) richtet es
+sich nach der Schulgröße: 12,5 s je Klasse, mindestens 300 s (18 oder
+24 Klassen → 300 s, 30 → 375 s, 36 → 450 s). Grundlage ist die
+Benchmark-Leiter: 36 Klassen erreichen erst mit 450 s die Qualität, die
+kleinere Schulen nach 300 s haben. Ein festes Zeitlimit in der
+Konfiguration oder `--time-limit` gilt immer; liegt ein festes Limit aus
+der Konfiguration unter dem Wert nach Schulgröße, weist `solve` darauf
+hin. Ältere Konfigurationen und Datensätze enthalten oft fest
+`time_limit_seconds: 300`; erst ohne diese Zeile gilt das Limit nach
+Schulgröße.
+
 ### Export
 
 ```bash
@@ -309,7 +320,7 @@ erreichen, egal wie der Plan aussieht.
 
 ```yaml
 solver:
-  time_limit_seconds: 300
+  time_limit_seconds:       # leer = nach Schulgröße; oder Sekunden, z.B. 600
   weight_gaps: 200          # Springstunden minimieren
   weight_double_lessons: 40
   weight_day_wishes: 20
@@ -598,7 +609,9 @@ Häufige Ursachen:
 
 ### Solver findet keine gute Lösung (schlechte Qualität)
 
-- Zeitlimit erhöhen: `--time-limit 600`
+- Zeitlimit erhöhen: `--time-limit 600`, oder ein festes
+  `time_limit_seconds` aus der Konfiguration entfernen (dann gilt das
+  Limit nach Schulgröße)
 - Soft-Gewichte anpassen: `--weights gaps=300,double_lessons=100`
 - Solver-Parallelismus: `num_workers: 0` in der Config (= automatisch alle Kerne)
 

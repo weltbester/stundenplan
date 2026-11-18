@@ -4,14 +4,16 @@ Ablauf je Stufe: Abnahme-Datensatz (vorgegebene Verteilung), dann
 Berichts-Datensatz (Programm wählt die Lehrkräfte), dann Abnahme. Fällt
 eine Stufe durch, endet die Leiter; die übrigen Stufen und die
 Frühwarn-Datensätze werden nicht gerechnet und im Bericht genannt.
+Jede Stufe rechnet mit ihrem eigenen Zeitlimit, außer ein Zeitlimit
+für alle Läufe ist vorgegeben (z.B. für einen schnellen Probelauf).
 """
 
-from typing import Callable
+from typing import Callable, Optional
 
 from pydantic import BaseModel
 
 from benchmarks.acceptance import (
-    EARLY_WARNING_DATASETS, LADDER, StageVerdict, evaluate_stage,
+    EARLY_WARNING, LADDER, StageVerdict, evaluate_stage,
 )
 from benchmarks.report import legend, table_lines
 from benchmarks.runner import RunResult
@@ -24,6 +26,7 @@ class DatasetRun(BaseModel):
     """Alle Läufe eines Datensatzes."""
 
     dataset: str
+    time_limit: int
     results: list[RunResult]
     notes: list[str] = []
 
@@ -64,17 +67,25 @@ def _run(
     runner: DatasetRunner, dataset: str, seeds: int, time_limit: int
 ) -> DatasetRun:
     results, notes = runner(dataset, seeds, time_limit)
-    return DatasetRun(dataset=dataset, results=results, notes=notes)
+    return DatasetRun(
+        dataset=dataset, time_limit=time_limit, results=results, notes=notes,
+    )
 
 
 def run_ladder(
-    runner: DatasetRunner, seed_count: int, time_limit: int
+    runner: DatasetRunner,
+    seed_count: int,
+    time_limit: Optional[int] = None,
 ) -> LadderReport:
-    """Rechnet die Stufen der Reihe nach, bis eine durchfällt."""
+    """Rechnet die Stufen der Reihe nach, bis eine durchfällt.
+
+    `time_limit` ersetzt die Zeitlimits der Stufen, wenn angegeben.
+    """
     report = LadderReport()
     for index, stage in enumerate(LADDER):
-        given = _run(runner, stage.given_dataset, seed_count, time_limit)
-        chosen = _run(runner, stage.chosen_dataset, seed_count, time_limit)
+        limit = _limit(time_limit, stage.time_limit)
+        given = _run(runner, stage.given_dataset, seed_count, limit)
+        chosen = _run(runner, stage.chosen_dataset, seed_count, limit)
         verdict = evaluate_stage(stage.name, given.results, seed_count)
         print(verdict.summary_line(), flush=True)
         report.stages.append(
@@ -84,17 +95,25 @@ def run_ladder(
             report.skipped = _remaining_datasets(index + 1)
             return report
     report.early_warning = [
-        _run(runner, dataset, seed_count, time_limit)
-        for dataset in EARLY_WARNING_DATASETS
+        _run(
+            runner, run.dataset, seed_count,
+            _limit(time_limit, run.time_limit),
+        )
+        for run in EARLY_WARNING
     ]
     return report
+
+
+def _limit(override: Optional[int], own: int) -> int:
+    """Vorgegebenes Zeitlimit für alle Läufe, sonst das eigene."""
+    return own if override is None else override
 
 
 def _remaining_datasets(first_stage: int) -> list[str]:
     names: list[str] = []
     for stage in LADDER[first_stage:]:
         names += [stage.given_dataset, stage.chosen_dataset]
-    return names + list(EARLY_WARNING_DATASETS)
+    return names + [run.dataset for run in EARLY_WARNING]
 
 
 def render_ladder(report: LadderReport, title: str) -> str:
@@ -127,7 +146,8 @@ def render_ladder(report: LadderReport, title: str) -> str:
 
 
 def _dataset_lines(run: DatasetRun, role: str) -> list[str]:
-    return [f"### {run.dataset} ({role})", ""] + table_lines(
+    heading = f"### {run.dataset} ({role}, Zeitlimit {run.time_limit} s)"
+    return [heading, ""] + table_lines(
         run.results, run.notes
     )
 

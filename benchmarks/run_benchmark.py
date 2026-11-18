@@ -51,8 +51,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=f"Anzahl gültiger Seeds ab {BASE_SEED} (Standard: 3).",
     )
     parser.add_argument(
-        "--time-limit", type=int, default=DEFAULT_TIME_LIMIT,
-        help="Solver-Zeitlimit pro Lauf in Sekunden (Standard: 300).",
+        "--time-limit", type=int, default=None,
+        help=f"Solver-Zeitlimit pro Lauf in Sekunden (Standard: "
+        f"{DEFAULT_TIME_LIMIT}; mit --all das Zeitlimit jeder Stufe, "
+        f"eine Angabe gilt dann für alle Stufen).",
     )
     parser.add_argument(
         "--label", default=None,
@@ -139,9 +141,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.all:
         return _main_ladder(args)
     label = args.label or DEFAULT_LABEL
-    results, notes = run_benchmark(
-        args.dataset, args.seeds, args.time_limit
+    time_limit = (
+        DEFAULT_TIME_LIMIT if args.time_limit is None else args.time_limit
     )
+    results, notes = run_benchmark(args.dataset, args.seeds, time_limit)
 
     title = f"{label} ({args.dataset})"
     markdown_path = args.output_dir / f"{label}.md"
@@ -159,9 +162,11 @@ def _main_ladder(args: argparse.Namespace) -> int:
     """Leiter rechnen, Bericht ausgeben und speichern."""
     label = args.label or LADDER_LABEL
     report = run_ladder(run_benchmark, args.seeds, args.time_limit)
-    text = render_ladder(
-        report, f"{label} ({args.seeds} Seeds, {args.time_limit} s)"
+    limits = (
+        "Zeitlimit je Stufe" if args.time_limit is None
+        else f"{args.time_limit} s für alle Stufen"
     )
+    text = render_ladder(report, f"{label} ({args.seeds} Seeds, {limits})")
     markdown_path = args.output_dir / f"{label}.md"
     csv_path = args.output_dir / f"{label}.csv"
     markdown_path.parent.mkdir(parents=True, exist_ok=True)

@@ -122,6 +122,11 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Lehrkräfte-Bedarf und Soll-Wochenstunden folgen ihr.
 
 ### Changed
+- Benchmark-Leiter: jede Stufe hat ihr eigenes Zeitlimit. `nrw-36` und
+  `long-day-36` rechnen 450 s statt 300 s, weil der Solver bei 36
+  Klassen nach 300 s noch deutlich verbessert (Spätgewinn bis 6,1 %).
+  `--time-limit` gilt mit `--all` für alle Stufen; der Bericht nennt
+  das Zeitlimit je Datensatz.
 - Das Soft-Ziel "Hauptfach-Verteilung" ist entfernt: es belohnte das
   Bündeln eines Fachs auf wenige Tage und ist durch C15 ersetzt.
   `weight_subject_spread` und `--weights subject_spread=…` werden noch

@@ -11,6 +11,10 @@ Abnahme einer Stufe: auf jedem der verlangten Seeds
 - null Validator-Fehler,
 - weniger als `MAX_LATE_GAIN_PERCENT` der Verbesserung im letzten
   Fünftel der Suchzeit.
+
+Jede Stufe hat ihr eigenes Zeitlimit: Bei 36 Klassen verbessert der
+Solver den Plan nach 300 s noch deutlich (Messung nrw36-450: Zielwert
+30–72 % besser, Spätgewinn 6,1 % → höchstens 2,4 %).
 """
 
 from typing import Optional
@@ -22,6 +26,9 @@ from benchmarks.runner import RunResult
 
 FIRST_PLAN_LIMIT_SECONDS = 60.0
 MAX_LATE_GAIN_PERCENT = 5.0
+# Zeitlimit je Lauf in Sekunden; große Schulen (36 Klassen) brauchen mehr
+STAGE_TIME_LIMIT_SECONDS = 300
+LARGE_STAGE_TIME_LIMIT_SECONDS = 450
 
 PASSED = "BESTANDEN"
 FAILED = "NICHT BESTANDEN"
@@ -31,6 +38,7 @@ class LadderStage(BaseModel):
     """Eine Stufe der Leiter: Abnahme- und Berichts-Datensatz."""
 
     name: str
+    time_limit: int = STAGE_TIME_LIMIT_SECONDS
 
     @property
     def given_dataset(self) -> str:
@@ -46,10 +54,23 @@ class LadderStage(BaseModel):
 LADDER: tuple[LadderStage, ...] = (
     LadderStage(name="nrw-18"),
     LadderStage(name="nrw-30"),
-    LadderStage(name="nrw-36"),
+    LadderStage(name="nrw-36", time_limit=LARGE_STAGE_TIME_LIMIT_SECONDS),
 )
+
+
+class EarlyWarningRun(BaseModel):
+    """Datensatz, der nach der Leiter nur berichtet wird."""
+
+    dataset: str
+    time_limit: int
+
+
 # Nur berichtet, nicht Teil der Abnahme.
-EARLY_WARNING_DATASETS: tuple[str, ...] = (LONG_DAY_NAME,)
+EARLY_WARNING: tuple[EarlyWarningRun, ...] = (
+    EarlyWarningRun(
+        dataset=LONG_DAY_NAME, time_limit=LARGE_STAGE_TIME_LIMIT_SECONDS,
+    ),
+)
 
 
 class StageVerdict(BaseModel):

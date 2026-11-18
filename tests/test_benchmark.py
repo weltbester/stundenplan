@@ -3,6 +3,7 @@
 import csv
 import logging
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -539,11 +540,13 @@ class FakeRunner:
     def __init__(self, failing: frozenset[str] = frozenset()) -> None:
         self.failing = failing
         self.calls: list[str] = []
+        self.time_limits: dict[str, int] = {}
 
     def __call__(
         self, dataset: str, seeds: int, time_limit: int
     ) -> tuple[list[RunResult], list[str]]:
         self.calls.append(dataset)
+        self.time_limits[dataset] = time_limit
         status = "INFEASIBLE" if dataset in self.failing else "FEASIBLE"
         results = [
             _result(dataset=dataset, seed=42 + index, status=status)
@@ -595,6 +598,62 @@ class TestLadder:
         runner = FakeRunner(failing=frozenset({"nrw-18"}))
         report = run_ladder(runner, 1, 60)
         assert report.passed
+
+    def test_each_stage_uses_its_own_time_limit(self):
+        from benchmarks.acceptance import (
+            LARGE_STAGE_TIME_LIMIT_SECONDS, STAGE_TIME_LIMIT_SECONDS,
+        )
+        from benchmarks.ladder import render_ladder, run_ladder
+
+        runner = FakeRunner()
+        report = run_ladder(runner, 1)
+
+        normal = STAGE_TIME_LIMIT_SECONDS
+        large = LARGE_STAGE_TIME_LIMIT_SECONDS
+        assert runner.time_limits == {
+            "nrw-18-fixed": normal, "nrw-18": normal,
+            "nrw-30-fixed": normal, "nrw-30": normal,
+            "nrw-36-fixed": large, "nrw-36": large,
+            "long-day-36": large,
+        }
+        text = render_ladder(report, "demo")
+        assert (
+            "### nrw-36-fixed (vorgegebene Verteilung, zählt für die "
+            f"Abnahme, Zeitlimit {large} s)"
+        ) in text
+        assert f"### long-day-36 (nur Bericht, Zeitlimit {large} s)" in text
+
+    def test_given_time_limit_applies_to_every_stage(self):
+        from benchmarks.ladder import run_ladder
+
+        runner = FakeRunner()
+        run_ladder(runner, 1, 60)
+        assert set(runner.time_limits.values()) == {60}
+
+    def test_cli_passes_no_time_limit_by_default(
+        self, tmp_path: Path, monkeypatch
+    ):
+        import benchmarks.run_benchmark as cli
+        from benchmarks.ladder import run_ladder
+
+        given: list[Optional[int]] = []
+
+        def fake_ladder(runner, seeds: int, time_limit: Optional[int]):
+            given.append(time_limit)
+            return run_ladder(FakeRunner(), seeds, time_limit)
+
+        monkeypatch.setattr(cli, "run_ladder", fake_ladder)
+        cli.main(["--all", "--seeds", "1", "--output-dir", str(tmp_path)])
+        cli.main(["--all", "--seeds", "1", "--time-limit", "60",
+                  "--output-dir", str(tmp_path), "--label", "kurz"])
+
+        assert given == [None, 60]
+        assert (tmp_path / "leiter.md").read_text(
+            encoding="utf-8"
+        ).startswith("# Benchmark-Leiter: leiter (1 Seeds, Zeitlimit je")
+        assert "(1 Seeds, 60 s für alle Stufen)" in (
+            tmp_path / "kurz.md"
+        ).read_text(encoding="utf-8")
 
     def test_cli_writes_report_and_returns_verdict(
         self, tmp_path: Path, monkeypatch

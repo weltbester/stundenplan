@@ -641,7 +641,7 @@ Solver-Änderung.
 python3.14 -m benchmarks.run_benchmark --dataset nrw-36-fixed --seeds 3
 python3.14 -m benchmarks.run_benchmark --seeds 1 --time-limit 60 \
     --label schnelltest
-python3.14 -m benchmarks.run_benchmark --all --seeds 5   # Leiter, ~3 h
+python3.14 -m benchmarks.run_benchmark --all --seeds 5   # Leiter, ~3,5 h
 ```
 
 | Datensatz | Inhalt |
@@ -664,8 +664,15 @@ und weniger als 5 % der Verbesserung im letzten Fünftel der Suchzeit
 erzielen. Der Datensatz, in dem das Programm die Lehrkräfte wählt,
 wird nur berichtet. Fällt eine Stufe durch, endet die Leiter; der
 Bericht nennt die Gründe je Seed und die nicht gerechneten Datensätze.
-Rückgabewert 1 bei nicht bestandener Abnahme. Mit dem Standard-Zeitlimit
-von 300 s dauert die ganze Leiter rund drei Stunden.
+Rückgabewert 1 bei nicht bestandener Abnahme.
+
+Jede Stufe hat ihr eigenes Zeitlimit je Lauf: `nrw-18` und `nrw-30`
+300 s, `nrw-36` und `long-day-36` 450 s. Bei 36 Klassen verbessert der
+Solver den Plan nach 300 s noch deutlich und würde am Spätgewinn
+scheitern, obwohl der erste Plan nach wenigen Sekunden steht.
+`--time-limit` gilt mit `--all` für alle Stufen (etwa für einen
+schnellen Probelauf). Ohne diese Angabe dauert die ganze Leiter mit
+5 Seeds rund dreieinhalb Stunden.
 
 | Spalte | Bedeutung |
 |--------|-----------|

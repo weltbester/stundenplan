@@ -3,6 +3,7 @@
 import pytest
 from click.testing import CliRunner
 
+from models.coupling import Coupling, CouplingGroup
 from models.fixed_assignment import (
     FixedAssignment, coupling_subjects_by_class,
 )
@@ -36,6 +37,9 @@ SHORT_CLASS = "5a"
 SPARE_TEACHER = "T11"
 SPARE_HOURS = 4
 RELI_TEACHERS = ("T08", "T09")
+# Zweiter gemeinsamer Doppelblock: reli_5 und reli_7 brauchen beide
+# T08 und T09, also je einen eigenen Block.
+SECOND_BLOCK = {(TUESDAY, 5), (TUESDAY, 6)}
 
 
 def _distribute(data: SchoolData, **options: object) -> DistributionResult:
@@ -435,7 +439,7 @@ class TestCouplingCapacity:
 
     def test_two_shared_lessons_in_a_double_block_are_enough(self):
         data = _reli_teachers_free(
-            _whole_day(MONDAY), {(MONDAY, 1), (MONDAY, 2)}
+            _whole_day(MONDAY) | SECOND_BLOCK, {(MONDAY, 1), (MONDAY, 2)}
             | _whole_day(TUESDAY),
         )
         assert is_distribution_complete(_distribute(data).data)
@@ -451,7 +455,7 @@ class TestCouplingCapacity:
 
     def test_without_day_limit_any_two_shared_lessons_are_enough(self):
         data = _reli_teachers_free(
-            _whole_day(MONDAY), {(MONDAY, 2), (MONDAY, 3)}
+            _whole_day(MONDAY) | SECOND_BLOCK, {(MONDAY, 2), (MONDAY, 3)}
             | _whole_day(TUESDAY),
             subject_day_limit=False,
         )
@@ -479,6 +483,128 @@ class TestCouplingCapacity:
         for coupling in result.data.couplings:
             chosen = {group.teacher_id for group in coupling.groups}
             assert SPARE_TEACHER in chosen
+
+
+def _with_spare_reli_teachers(
+    data: SchoolData, spare_ids: tuple[str, ...]
+) -> SchoolData:
+    """Zusätzliche Reli/Ethik-Lehrkräfte ohne Sperrzeiten; alle
+    Reli-Lehrkräfte dürfen leer ausgehen."""
+    template = data.teachers[0]
+    spares = [
+        template.model_copy(update={
+            "id": spare_id, "name": f"Reserve, {spare_id}",
+            "subjects": ["Religion", "Ethik"], "deputat_min": 0,
+            "unavailable_slots": [],
+        })
+        for spare_id in spare_ids
+    ]
+    teachers = [
+        t.model_copy(update={"deputat_min": 0})
+        if t.id in RELI_TEACHERS else t
+        for t in data.teachers
+    ]
+    return data.model_copy(update={"teachers": teachers + spares})
+
+
+def _with_art_coupling(
+    data: SchoolData, teacher_id: str, free: set[tuple[int, int]]
+) -> SchoolData:
+    """5a hat zusätzlich eine Kunst-Kopplung (2 h) bei `teacher_id`,
+    der nur in `free` kann und sonst nichts unterrichtet."""
+    template = data.teachers[0]
+    teacher = template.model_copy(update={
+        "id": teacher_id, "name": f"Kunst, {teacher_id}",
+        "subjects": ["Kunst"], "deputat_min": 0,
+        "unavailable_slots": _free_only(free),
+    })
+    art = Coupling(
+        id="kunst_5", coupling_type="wpf", involved_class_ids=["5a"],
+        groups=[CouplingGroup(
+            group_name="kunst", subject="Kunst", hours_per_week=2,
+            teacher_id=teacher_id,
+        )],
+        hours_per_week=2, cross_class=False,
+    )
+    return data.model_copy(update={
+        "teachers": data.teachers + [teacher],
+        "couplings": data.couplings + [art],
+    })
+
+
+def _fixed_coupling(
+    data: SchoolData, coupling_id: str, teacher_ids: tuple[str, str]
+) -> SchoolData:
+    """Kopplung `coupling_id` mit fest vorgegebenen Lehrkräften."""
+    couplings = []
+    for coupling in data.couplings:
+        if coupling.id == coupling_id:
+            groups = [
+                group.model_copy(update={"teacher_id": teacher_id})
+                for group, teacher_id in zip(coupling.groups, teacher_ids)
+            ]
+            coupling = coupling.model_copy(update={"groups": groups})
+        couplings.append(coupling)
+    return data.model_copy(update={"couplings": couplings})
+
+
+class TestCouplingTimetable:
+    """Alle Kopplungen zusammen brauchen einen Plan ohne Überschneidung."""
+
+    # T08 und T09 haben nur Mo 1-2 gemeinsam frei. Jede Kopplung passt
+    # dort allein hinein, beide zusammen nicht (beide brauchen T08/T09).
+    ONLY_SHARED = (
+        {(MONDAY, 1), (MONDAY, 2)} | _whole_day(TUESDAY),
+        {(MONDAY, 1), (MONDAY, 2)} | _whole_day(2),
+    )
+
+    def test_teacher_in_two_couplings_at_once_is_error(self):
+        data = _reli_teachers_free(*self.ONLY_SHARED)
+
+        with pytest.raises(DistributionError, match="INFEASIBLE"):
+            _distribute(data)
+
+    def test_spare_teachers_take_the_second_coupling(self):
+        spares = (SPARE_TEACHER, "T12")
+        data = _with_spare_reli_teachers(
+            _reli_teachers_free(*self.ONLY_SHARED), spares
+        )
+
+        result = _distribute(data)
+
+        # T08 und T09 können nur gemeinsam Mo 1-2: höchstens eine
+        # Kopplung hat beide
+        with_both = [
+            coupling.id for coupling in result.data.couplings
+            if set(RELI_TEACHERS)
+            <= {g.teacher_id for g in coupling.groups}
+        ]
+        assert len(with_both) <= 1
+
+    def test_class_in_two_couplings_at_once_is_error(self):
+        only = {(MONDAY, 1), (MONDAY, 2)}
+        spares = (SPARE_TEACHER, "T12")
+        data = _with_spare_reli_teachers(
+            _reli_teachers_free(only, only), spares
+        )
+        data = _fixed_coupling(data, "reli_5", RELI_TEACHERS)
+        data = _fixed_coupling(data, "reli_7", spares)
+        data = _with_art_coupling(data, "T13", only)
+
+        with pytest.raises(DistributionError, match="INFEASIBLE"):
+            _distribute(data)
+
+    def test_class_couplings_at_different_times_are_fine(self):
+        only = {(MONDAY, 1), (MONDAY, 2)}
+        spares = (SPARE_TEACHER, "T12")
+        data = _with_spare_reli_teachers(
+            _reli_teachers_free(only, only), spares
+        )
+        data = _fixed_coupling(data, "reli_5", RELI_TEACHERS)
+        data = _fixed_coupling(data, "reli_7", spares)
+        data = _with_art_coupling(data, "T13", {(MONDAY, 3), (MONDAY, 4)})
+
+        assert is_distribution_complete(_distribute(data).data)
 
 
 class TestTimetableTimeLimit:

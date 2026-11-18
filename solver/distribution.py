@@ -16,6 +16,10 @@ Bedingungen aus den Sperrzeiten, ohne die Stufe 2 sicher scheitert:
 - Kopplungen: Die gewählten Lehrkräfte einer Kopplung haben genug
   gemeinsame freie Stunden, mit C15 verteilt auf genug Tage (je Tag
   eine Stunde oder ein Doppelblock).
+- Kopplungsplan: Die Stunden aller Kopplungen bekommen Zeiten, in denen
+  ihre gewählten Lehrkräfte frei sind, mit C15, ohne dass eine
+  Lehrkraft oder Klasse zwei Kopplungen zugleich hat. Reguläre Stunden
+  bekommen hier keine Zeiten.
 """
 
 import time
@@ -37,6 +41,7 @@ from models.school_data import SchoolData
 from models.teacher import (
     HALF_LESSONS_PER_LESSON, Teacher, format_hours_delta,
 )
+from solver.day_limit import day_conflict_cliques
 from solver.pinning import PinnedLesson
 
 SOLVED_STATUSES = (cp_model.OPTIMAL, cp_model.FEASIBLE)
@@ -173,6 +178,8 @@ class _DistributionModel:
         self.loads: dict[str, cp_model.LinearExprT] = {}
         # 1, wenn alle gewählten Lehrkräfte der Kopplung frei sind
         self.coupling_free: dict[CouplingSlotKey, cp_model.IntVar] = {}
+        # 1, wenn die Kopplung im Kopplungsplan in dieser Stunde liegt
+        self.coupling_lessons: dict[CouplingSlotKey, cp_model.IntVar] = {}
 
         time_grid = data.config.time_grid
         self._slot_numbers = sek1_slot_numbers(time_grid)
@@ -193,6 +200,7 @@ class _DistributionModel:
         self._add_coupling_free_vars()
         self._add_class_day_start()
         self._add_coupling_capacity()
+        self._add_coupling_timetable()
 
     def _candidates(
         self, subject: str, given_teacher: Optional[str]
@@ -386,6 +394,93 @@ class _DistributionModel:
         self.model.add_bool_or(both_free).only_enforce_if(double)
         return single + double
 
+    def _add_coupling_timetable(self) -> None:
+        """Ein Plan nur für die Kopplungsstunden, mit den Regeln aus Stufe 2.
+
+        Ohne ihn wählt Stufe 1 Lehrkräfte, deren Kopplungen einzeln in
+        die freien Stunden passen, zusammen aber nicht (z.B. eine
+        Lehrkraft in drei Kopplungen mit wenigen gemeinsamen Stunden).
+        """
+        self._add_coupling_lesson_vars()
+        if self.data.config.solver.subject_day_limit:
+            self._add_coupling_day_limit()
+        self._add_coupling_class_overlap()
+        self._add_coupling_teacher_overlap()
+
+    def _add_coupling_lesson_vars(self) -> None:
+        """Wochenstunden je Kopplung, nur wo ihre Lehrkräfte frei sind."""
+        for coupling in self.data.couplings:
+            lessons = []
+            for day, hour in self._slots:
+                key = (coupling.id, day, hour)
+                lesson = self.model.new_bool_var(
+                    f"lesson_{coupling.id}_{day}_{hour}"
+                )
+                self.model.add_implication(lesson, self.coupling_free[key])
+                self.coupling_lessons[key] = lesson
+                lessons.append(lesson)
+            self.model.add(sum(lessons) == coupling.hours_per_week)
+
+    def _add_coupling_day_limit(self) -> None:
+        """C15: je Kopplung und Tag eine Stunde oder ein Doppelblock."""
+        cliques = day_conflict_cliques(self.data.config.time_grid)
+        days = range(self.data.config.time_grid.days_per_week)
+        for coupling, day, clique in product(
+            self.data.couplings, days, cliques
+        ):
+            self.model.add_at_most_one(
+                self.coupling_lessons[(coupling.id, day, hour)]
+                for hour in clique
+            )
+
+    def _add_coupling_class_overlap(self) -> None:
+        """Keine Klasse in zwei Kopplungen zur selben Stunde."""
+        couplings_of: dict[str, list[str]] = {}
+        for coupling in self.data.couplings:
+            for class_id in coupling.involved_class_ids:
+                couplings_of.setdefault(class_id, []).append(coupling.id)
+        for coupling_ids in couplings_of.values():
+            if len(coupling_ids) < 2:
+                continue
+            for day, hour in self._slots:
+                self.model.add_at_most_one(
+                    self.coupling_lessons[(coupling_id, day, hour)]
+                    for coupling_id in coupling_ids
+                )
+
+    def _add_coupling_teacher_overlap(self) -> None:
+        """Keine Lehrkraft in zwei Kopplungen zur selben Stunde.
+
+        Nur für Lehrkräfte, die für mehrere Kopplungen in Frage kommen;
+        in gesperrten Stunden verbietet das schon `coupling_free`.
+        """
+        groups_of: dict[str, dict[str, list[cp_model.IntVar]]] = {}
+        for (coupling_id, _, teacher_id), var in self.group_vars.items():
+            groups_of.setdefault(teacher_id, {}).setdefault(
+                coupling_id, []
+            ).append(var)
+        for teacher_id, by_coupling in groups_of.items():
+            if len(by_coupling) < 2:
+                continue
+            for day, hour in self._slots:
+                if teacher_id in self._blocked_at[(day, hour)]:
+                    continue
+                self.model.add_at_most_one(
+                    self._teacher_busy(group_vars, (coupling_id, day, hour))
+                    for coupling_id, group_vars in by_coupling.items()
+                )
+
+    def _teacher_busy(
+        self, group_vars: list[cp_model.IntVar], key: CouplingSlotKey
+    ) -> cp_model.IntVar:
+        """1, wenn die Lehrkraft (eine ihrer Gruppen) in der Stunde
+        `key` die Kopplung unterrichtet."""
+        lesson = self.coupling_lessons[key]
+        busy = self.model.new_bool_var(f"busy_{key[0]}_{key[1]}_{key[2]}")
+        for group in group_vars:
+            self.model.add_bool_or([group.negated(), lesson.negated(), busy])
+        return busy
+
     def add_target_objective(self) -> None:
         """Minimiert die quadrierten Abstände vom Soll (halbe Stunden)."""
         max_buffer = self.data.config.teachers.deputat_max_buffer
@@ -465,8 +560,10 @@ def distribute_teachers(
         raise DistributionError(
             f"Keine Unterrichtsverteilung gefunden "
             f"(Status {solver.status_name(status)}). Mögliche Gründe: "
-            f"Deputatgrenzen, fehlende Fachlehrkräfte oder Sperrzeiten, "
-            f"in denen eine Klasse oder Kopplung keine freie Lehrkraft hat."
+            f"Deputatgrenzen, fehlende Fachlehrkräfte, Sperrzeiten, "
+            f"in denen eine Klasse oder Kopplung keine freie Lehrkraft "
+            f"hat, oder Kopplungen, die zusammen nicht in die freien "
+            f"Stunden ihrer Lehrkräfte und Klassen passen."
         )
 
     fixed = [

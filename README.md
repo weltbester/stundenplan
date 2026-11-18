@@ -157,10 +157,15 @@ python main.py solve --single-stage    # Verteilung und Plan in einem Schritt
 
 Ist die Verteilung vollständig vorgegeben, entfällt Stufe 1. Stufe 1
 bekommt höchstens ein Fünftel des Zeitlimits (maximal 60 s). Sie legt
-keine Zeiten fest, prüft aber zwei Bedingungen aus den Sperrzeiten:
-Jede Klasse hat in den Stunden, die sie an jedem Tag braucht, eine
-freie Lehrkraft (oder eine mögliche Kopplung), und die Lehrkräfte einer
-Kopplung haben genug gemeinsame freie Stunden. Findet Stufe 2 für die
+keine Zeiten für den regulären Unterricht fest, prüft aber drei
+Bedingungen aus den Sperrzeiten: Jede Klasse hat in den Stunden, die
+sie an jedem Tag braucht, eine freie Lehrkraft (oder eine mögliche
+Kopplung); die Lehrkräfte einer Kopplung haben genug gemeinsame freie
+Stunden; und alle Kopplungen zusammen bekommen einen Plan, in dem
+keine Lehrkraft und keine Klasse zwei Kopplungen zugleich hat (mit der
+Regel C15 je Kopplung und Tag). Sonst kann Stufe 1 eine Lehrkraft in
+mehrere Kopplungen setzen, die einzeln in ihre freien Stunden passen,
+zusammen aber nicht. Findet Stufe 2 für die
 berechnete Verteilung trotzdem keinen Plan, rechnet `--single-stage`
 beides in einem Schritt (deutlich langsamer).
 

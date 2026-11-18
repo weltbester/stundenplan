@@ -12,7 +12,6 @@ Architektur:
 import os
 import time
 import logging
-from itertools import product
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +24,7 @@ from models.teacher import HALF_LESSONS_PER_LESSON, Teacher
 from models.school_class import SchoolClass
 from models.coupling import Coupling
 from solver.pinning import PinnedLesson
+from solver.day_limit import day_conflict_cliques
 from solver.time_budget import TimeBudget, effective_time_limit
 
 logger = logging.getLogger(__name__)
@@ -1378,28 +1378,8 @@ class ScheduleSolver:
                     self._model.add_at_most_one(literals)
 
     def _day_conflict_cliques(self) -> list[tuple[int, ...]]:
-        """Slot-Mengen, aus denen ein Fach pro Tag höchstens einen belegt.
-
-        Die Slots eines Tages zerfallen in Gruppen: jeder Doppelblock ist
-        eine Zweiergruppe, jeder übrige Slot eine Einergruppe. Erlaubt sind
-        nur Stunden innerhalb EINER Gruppe. Zwei Slots aus verschiedenen
-        Gruppen schließen sich also aus; die größten solchen Mengen
-        entstehen, indem man aus jeder Gruppe genau einen Slot wählt.
-        Default-Raster (Blöcke 1-2, 3-4, 5-6, Einzelslot 7): 8 Cliquen.
-        """
-        tg = self.config.time_grid
-        slot_numbers = {s.slot_number for s in self.sek1_slots}
-
-        groups: list[tuple[int, ...]] = []
-        grouped: set[int] = set()
-        for db in tg.double_blocks:
-            block = (db.slot_first, db.slot_second)
-            if slot_numbers.issuperset(block) and grouped.isdisjoint(block):
-                groups.append(block)
-                grouped.update(block)
-        groups.extend((h,) for h in sorted(slot_numbers - grouped))
-
-        return list(product(*groups))
+        """Slot-Mengen für C15, siehe solver/day_limit.py."""
+        return day_conflict_cliques(self.config.time_grid)
 
     def _lesson_streams_per_day(self) -> list[dict[int, list]]:
         """Je (Klasse, Fach, Tag) und je (Kopplung, Tag): Slot → Literale.

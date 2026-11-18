@@ -221,6 +221,14 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   für `main.py solve` und den Benchmark gleich.
 
 ### Fixed
+- Stufe 1 (Unterrichtsverteilung) plant die Kopplungsstunden mit:
+  Zeiten nur, wo alle gewählten Lehrkräfte frei sind, Regel C15 je
+  Kopplung, keine Lehrkraft und keine Klasse in zwei Kopplungen
+  zugleich. Bisher prüfte Stufe 1 jede Kopplung einzeln; bei nrw-36
+  Seed 42 setzte sie in etwa jedem zehnten Lauf eine Lehrkraft in drei
+  Kopplungen, die zusammen nicht in ihre freien Stunden passten, und
+  Stufe 2 war unlösbar. Stufe 1 ohne Ziel dauert bei 36 Klassen etwa
+  1 s statt 0,5 s.
 - Testdaten-Profil `nrw-g9`: Sperrzeiten lassen in jeder Stunde, die
   jede Klasse täglich hat, mindestens Klassen × 1,15 Lehrkräfte frei.
   Bei 3 Klassen je Jahrgang waren montags in der 1. Stunde teils nur

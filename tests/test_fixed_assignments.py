@@ -415,7 +415,8 @@ class TestImport:
 class TestExportWorkbook:
 
     @pytest.fixture(scope="class")
-    def solved(self):
+    @classmethod
+    def solved(cls):
         from solver.scheduler import ScheduleSolver
 
         data = make_mini_school_data()

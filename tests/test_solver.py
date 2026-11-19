@@ -180,7 +180,8 @@ class TestNoConflicts:
     """Kernkorrektheit: Keine Überschneidungen."""
 
     @pytest.fixture(scope="class")
-    def solution(self):
+    @classmethod
+    def solution(cls):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
         return solver.solve(use_soft=False)
@@ -234,7 +235,8 @@ class TestCurriculumSatisfied:
     """Stundentafel wird korrekt erfüllt."""
 
     @pytest.fixture(scope="class")
-    def solution_and_data(self):
+    @classmethod
+    def solution_and_data(cls):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
         solution = solver.solve(use_soft=False)
@@ -279,7 +281,8 @@ class TestDeputat:
     """Deputat ±Toleranz."""
 
     @pytest.fixture(scope="class")
-    def solution_and_data(self):
+    @classmethod
+    def solution_and_data(cls):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
         solution = solver.solve(use_soft=False)
@@ -356,7 +359,8 @@ class TestSpecialRooms:
     """Fachraum-Kapazität wird nicht überschritten."""
 
     @pytest.fixture(scope="class")
-    def solution_and_data(self):
+    @classmethod
+    def solution_and_data(cls):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
         solution = solver.solve(use_soft=False)
@@ -394,7 +398,8 @@ class TestDoubleLessons:
     """Doppelstunden-Pflicht wird eingehalten."""
 
     @pytest.fixture(scope="class")
-    def solution_and_data(self):
+    @classmethod
+    def solution_and_data(cls):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
         solution = solver.solve(use_soft=False)
@@ -675,7 +680,8 @@ class TestDoubleVars:
     """Phase 3: double[]-Variablen werden korrekt erstellt und verknüpft."""
 
     @pytest.fixture(scope="class")
-    def solver_with_vars(self):
+    @classmethod
+    def solver_with_vars(cls):
         data = make_mini_school_data()
         s = ScheduleSolver(data)
         s._build_slot_index()
@@ -867,14 +873,16 @@ class TestSoftConstraints:
     """Weiche Constraints: Solver findet Lösung mit und ohne Soft-Optimierung."""
 
     @pytest.fixture(scope="class")
-    def solution_soft(self):
+    @classmethod
+    def solution_soft(cls):
         data = make_mini_school_data()
         data.config.solver.time_limit_seconds = 15  # Kurz für Tests
         solver = ScheduleSolver(data)
         return solver.solve(use_soft=True)
 
     @pytest.fixture(scope="class")
-    def solution_hard_only(self):
+    @classmethod
+    def solution_hard_only(cls):
         data = make_mini_school_data()
         solver = ScheduleSolver(data)
         return solver.solve(use_soft=False)

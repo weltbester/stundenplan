@@ -100,7 +100,8 @@ class TestCouplingBuilder:
 class TestNrwCouplings:
 
     @pytest.fixture(scope="class")
-    def couplings(self) -> dict:
+    @classmethod
+    def couplings(cls) -> dict:
         data = _generate(seed=1)
         return {c.id: c for c in data.couplings}
 

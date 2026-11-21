@@ -624,16 +624,16 @@ def _build_mini_school_data():
     dep_max = 9  # 10 × 9h = 90h >> Gesamtbedarf (62h inkl. Kopplung) → Solver-Spielraum
     dep_min = 4  # T08/T09 (Kopplung-only) bekommen max 4h Kopplungsstunden → dep_min ≤ 4
     teachers = [
-        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T01", name="Müller, Anna",   subjects=["Deutsch", "Geschichte"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T02", name="Schmidt, Hans",  subjects=["Mathematik", "Physik"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T03", name="Weber, Eva",     subjects=["Englisch", "Politik"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T04", name="Becker, Klaus",  subjects=["Biologie", "Erdkunde"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T05", name="Koch, Lisa",     subjects=["Kunst", "Musik"],         deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T06", name="Wagner, Tom",    subjects=["Sport", "Chemie"],        deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T07", name="Braun, Sara",    subjects=["Latein", "Deutsch"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T08", name="Wolf, Peter",    subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T09", name="Neumann, Maria", subjects=["Religion", "Ethik"],      deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T10", name="Schulz, Ralf",   subjects=["Mathematik", "Deutsch"],  deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
     ]
     couplings = [
         Coupling(id="reli_5", coupling_type="reli_ethik", involved_class_ids=["5a"],
@@ -650,7 +650,7 @@ def _build_mini_school_data():
 
 
 def _parse_weights(s: str) -> dict:
-    """Parst Gewichte aus einem String wie 'gaps=200,compact=50'."""
+    """Parst Gewichte aus einem String wie 'gaps=200,double_lessons=50'."""
     result = {}
     for part in s.split(","):
         part = part.strip()
@@ -668,6 +668,14 @@ def _parse_weights(s: str) -> dict:
                 f"Ungültiger Wert für '{k.strip()}': '{v.strip()}' – muss eine ganze Zahl sein."
             )
     return result
+
+
+def _split_weights(weights: dict) -> "tuple[dict, list[str]]":
+    """Trennt wirksame Gewichte von unbekannten oder entfernten Namen."""
+    from solver.scheduler import SOFT_WEIGHT_NAMES
+    known = {k: v for k, v in weights.items() if k in SOFT_WEIGHT_NAMES}
+    ignored = [k for k in weights if k not in SOFT_WEIGHT_NAMES]
+    return known, ignored
 
 
 def _run_distribution_stage(
@@ -830,6 +838,14 @@ def cmd_solve(time_limit, small, json_path, output, pins_path, diagnose, verbose
         except click.BadParameter as e:
             console.print(f"[red bold]Ungültige Gewichte:[/red bold] {e}")
             sys.exit(1)
+        parsed_weights, ignored = _split_weights(parsed_weights)
+        if ignored:
+            from solver.scheduler import SOFT_WEIGHT_NAMES
+            console.print(
+                f"[yellow]Gewichte ohne Wirkung ignoriert: "
+                f"{', '.join(ignored)}. Wirksam sind: "
+                f"{', '.join(SOFT_WEIGHT_NAMES)}.[/yellow]"
+            )
 
     # ── Stufe 1: Unterrichtsverteilung ───────────────────────────────────────
     distribution_generated = False

@@ -105,16 +105,16 @@ def make_mini_school_data(seed: int = 42) -> SchoolData:
     dep_max = 9
     dep_min = 4
     teachers = [
-        Teacher(id="T01", name="Müller, Anna",    subjects=["Deutsch", "Geschichte"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T02", name="Schmidt, Hans",   subjects=["Mathematik", "Physik"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T03", name="Weber, Eva",      subjects=["Englisch", "Politik"],     deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T04", name="Becker, Klaus",   subjects=["Biologie", "Erdkunde"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T05", name="Koch, Lisa",      subjects=["Kunst", "Musik"],          deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T06", name="Wagner, Tom",     subjects=["Sport", "Chemie"],         deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T07", name="Braun, Sara",     subjects=["Latein", "Deutsch"],       deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T08", name="Wolf, Peter",     subjects=["Religion", "Ethik"],       deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T09", name="Neumann, Maria",  subjects=["Religion", "Ethik"],       deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
-        Teacher(id="T10", name="Schulz, Ralf",    subjects=["Mathematik", "Deutsch"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6, max_gaps_per_day=2),
+        Teacher(id="T01", name="Müller, Anna",    subjects=["Deutsch", "Geschichte"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T02", name="Schmidt, Hans",   subjects=["Mathematik", "Physik"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T03", name="Weber, Eva",      subjects=["Englisch", "Politik"],     deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T04", name="Becker, Klaus",   subjects=["Biologie", "Erdkunde"],    deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T05", name="Koch, Lisa",      subjects=["Kunst", "Musik"],          deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T06", name="Wagner, Tom",     subjects=["Sport", "Chemie"],         deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T07", name="Braun, Sara",     subjects=["Latein", "Deutsch"],       deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T08", name="Wolf, Peter",     subjects=["Religion", "Ethik"],       deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T09", name="Neumann, Maria",  subjects=["Religion", "Ethik"],       deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
+        Teacher(id="T10", name="Schulz, Ralf",    subjects=["Mathematik", "Deutsch"],   deputat_max=dep_max, deputat_min=dep_min, max_hours_per_day=6),
     ]
 
     # Kopplungen: je eine Reli/Ethik-Kopplung pro Jahrgang
@@ -329,7 +329,6 @@ class TestUnavailability:
             unavailable_slots=[(0, 1)],  # Montag 1. Stunde gesperrt
             preferred_free_days=t.preferred_free_days,
             max_hours_per_day=t.max_hours_per_day,
-            max_gaps_per_day=t.max_gaps_per_day,
         )
         teachers[0] = new_t
         data = SchoolData(

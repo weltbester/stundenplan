@@ -38,7 +38,8 @@ class Teacher(BaseModel):
     unavailable_slots: list[tuple[int, int]] = [] # (day, slot_number)
     preferred_free_days: list[int] = []           # 0=Mo..4=Fr
     max_hours_per_day: int = 6
-    max_gaps_per_day: int = 2
+    # Das frühere Feld max_gaps_per_day (ohne Wirkung) ist entfernt; ältere
+    # Datensätze mit dem Feld laden weiter, Pydantic ignoriert es.
 
     @property
     def deputat(self) -> int:

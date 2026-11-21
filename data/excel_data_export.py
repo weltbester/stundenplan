@@ -141,7 +141,6 @@ def _teacher_row(teacher: Teacher, deputat_buffer: int) -> list:
         blocked,
         free_days,
         teacher.max_hours_per_day,
-        teacher.max_gaps_per_day,
     ]
 
 

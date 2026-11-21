@@ -134,6 +134,10 @@ class SolveProgressCallback(cp_model.CpSolverSolutionCallback):
         return self._solution_count
 
 
+# Gewichte, die `solve --weights` überschreiben kann (weiche Ziele).
+SOFT_WEIGHT_NAMES = ("gaps", "day_wishes", "double_lessons")
+
+
 # ─── Haupt-Solver ─────────────────────────────────────────────────────────────
 
 class ScheduleSolver:
@@ -1228,8 +1232,8 @@ class ScheduleSolver:
             "day_wishes":     sc.weight_day_wishes,
             "double_lessons": sc.weight_double_lessons,
         }
-        # "subject_spread" wird weiterhin akzeptiert, hat aber keine Wirkung
-        # mehr: die Verteilung über die Woche erzwingt jetzt C15 (hart).
+        # Andere Schlüssel (z.B. das frühere "subject_spread") bleiben ohne
+        # Wirkung; main.py solve meldet sie, siehe SOFT_WEIGHT_NAMES.
         if weights:
             w.update(weights)
 

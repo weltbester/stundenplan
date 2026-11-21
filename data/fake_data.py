@@ -221,7 +221,6 @@ class FakeDataGenerator:
             preferred_free_days=preferred_free_days or [],
             unavailable_slots=unavailable_slots or [],
             max_hours_per_day=tc.max_hours_per_day,
-            max_gaps_per_day=tc.max_gaps_per_day,
         )
 
     def _generate_teachers(self) -> list[Teacher]:

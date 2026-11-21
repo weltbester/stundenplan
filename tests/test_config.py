@@ -333,6 +333,89 @@ class TestModels:
 
 # ─── FAKE-DATEN ───────────────────────────────────────────────────────────────
 
+class TestRemovedSettings:
+    """Entfernte Einstellungen ohne Wirkung: ältere Dateien laden weiter."""
+
+    OLD_VALUES = {
+        "time_grid": {"min_hours_per_day": 5},
+        "teachers": {"max_gaps_per_day": 1, "max_gaps_per_week": 3},
+        "solver": {
+            "weight_workload_balance": 50,
+            "weight_compact": 30,
+            "weight_subject_spread": 60,
+        },
+    }
+
+    def _old_config_dict(self) -> dict:
+        raw = default_school_config().model_dump(mode="json")
+        for section, values in self.OLD_VALUES.items():
+            raw[section].update(values)
+        return raw
+
+    def test_old_config_loads_without_the_fields(self, monkeypatch):
+        import config.schema as schema
+        monkeypatch.setattr(schema, "_warned_removed_fields", set())
+        config = SchoolConfig.model_validate(self._old_config_dict())
+        for section, values in self.OLD_VALUES.items():
+            part = getattr(config, section)
+            for name in values:
+                assert not hasattr(part, name), f"{section}.{name}"
+        assert config == default_school_config()
+
+    def test_each_removed_field_is_warned_once(self, monkeypatch, caplog):
+        import config.schema as schema
+        monkeypatch.setattr(schema, "_warned_removed_fields", set())
+        with caplog.at_level("WARNING", logger="config.schema"):
+            SchoolConfig.model_validate(self._old_config_dict())
+            SchoolConfig.model_validate(self._old_config_dict())
+        messages = [r.getMessage() for r in caplog.records]
+        expected = [
+            f"{section}.{name}"
+            for section, values in self.OLD_VALUES.items()
+            for name in values
+        ]
+        for key in expected:
+            assert sum(f"'{key}'" in m for m in messages) == 1, key
+        assert len(messages) == len(expected)
+
+    def test_old_yaml_file_loads(self, tmp_path: Path, monkeypatch):
+        from ruamel.yaml import YAML
+        import config.schema as schema
+        monkeypatch.setattr(schema, "_warned_removed_fields", set())
+        path = tmp_path / "alt.yaml"
+        with path.open("w", encoding="utf-8") as handle:
+            YAML().dump(self._old_config_dict(), handle)
+        config = ConfigManager().load(path)
+        assert not hasattr(config.solver, "weight_compact")
+
+    def test_current_config_has_no_warning(self, monkeypatch, caplog):
+        import config.schema as schema
+        monkeypatch.setattr(schema, "_warned_removed_fields", set())
+        with caplog.at_level("WARNING", logger="config.schema"):
+            SchoolConfig.model_validate(
+                default_school_config().model_dump(mode="json")
+            )
+        assert caplog.records == []
+
+    def test_old_teacher_field_is_ignored(self):
+        from models.teacher import Teacher
+        teacher = Teacher.model_validate({
+            "id": "MÜL", "name": "Müller, Hans", "subjects": ["Deutsch"],
+            "deputat_max": 26, "deputat_min": 21, "max_gaps_per_day": 2,
+        })
+        assert not hasattr(teacher, "max_gaps_per_day")
+        assert "max_gaps_per_day" not in teacher.model_dump()
+
+    def test_split_weights_separates_ineffective_names(self):
+        from main import _split_weights
+        known, ignored = _split_weights(
+            {"gaps": 100, "compact": 50, "subject_spread": 0,
+             "double_lessons": 40}
+        )
+        assert known == {"gaps": 100, "double_lessons": 40}
+        assert ignored == ["compact", "subject_spread"]
+
+
 class TestFakeData:
     def test_generate_returns_school_data(self):
         """FakeDataGenerator.generate() gibt SchoolData zurück."""

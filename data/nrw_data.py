@@ -570,7 +570,6 @@ class NrwDataGenerator:
             unavailable_slots=self._blocked_slots(post, upper, guard),
             preferred_free_days=wishes,
             max_hours_per_day=settings.max_hours_per_day,
-            max_gaps_per_day=settings.max_gaps_per_day,
         )
 
     @staticmethod

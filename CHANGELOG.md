@@ -126,6 +126,11 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
   Lehrkräfte-Bedarf und Soll-Wochenstunden folgen ihr.
 
 ### Changed
+- `solve --weights` meldet Namen ohne Wirkung (z.B. `compact`,
+  `subject_spread`) und nennt die wirksamen: `gaps`, `day_wishes`,
+  `double_lessons`. Bisher wurden sie stillschweigend ignoriert.
+- README: die Lehrerzuweisung ist als eigene erste Stufe beschrieben
+  statt als gemeinsame Optimierung mit dem Stundenplan.
 - Standard für `solver.time_limit_seconds` ist nicht mehr 300, sondern
   leer (= nach Schulgröße). Gespeicherte Werte bleiben gültig.
 - Benchmark-Leiter: jede Stufe hat ihr eigenes Zeitlimit. `nrw-36` und
@@ -276,3 +281,10 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 
 ### Removed
 - `.DS_Store` aus der Versionsverwaltung entfernt (Datei bleibt lokal).
+- Einstellungen ohne Wirkung: `time_grid.min_hours_per_day`,
+  `teachers.max_gaps_per_day`, `teachers.max_gaps_per_week`,
+  `solver.weight_workload_balance`, `solver.weight_compact`,
+  `solver.weight_subject_spread`, das Feld `max_gaps_per_day` der
+  Lehrkräfte und die Spalte *Max Springstd/Tag* der Excel-Vorlage.
+  Ältere Konfigurationen, Datensätze, Szenarien und Mappen laden weiter;
+  die Felder werden ignoriert und einmal als Warnung genannt.

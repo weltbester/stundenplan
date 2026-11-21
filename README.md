@@ -7,8 +7,10 @@ Löst die Stundenzuweisung als Constraint-Satisfaction-Problem mit Google OR-Too
 
 - **Vollständig konfigurierbar**: Zeitraster, Jahrgänge, Klassenanzahl, Fachräume,
   Kopplungen und Solver-Gewichte — alles über YAML oder einen interaktiven Wizard.
-- **Solver-basierte Lehrerzuweisung**: Welcher Lehrer welche Klasse unterrichtet,
-  wird gemeinsam mit der Stundenzuweisung optimiert.
+- **Lehrerzuweisung durch das Programm**: Fehlt die Unterrichtsverteilung
+  ganz oder teilweise, wählt das Programm zuerst die Lehrkräfte (möglichst
+  nah am Soll-Deputat) und rechnet danach den Stundenplan. Vorgegebene
+  Zuweisungen bleiben erhalten.
 - **Doppelstunden**: Pflicht- und optionale Doppelstunden, nur in konfigurierten
   Blöcken (nie über Pausen hinweg).
 - **Klassenübergreifende Kopplungen**: Religion/Ethik, Wahlpflichtfächer (WPF)
@@ -275,7 +277,6 @@ time_grid:
     - {slot_first: 5, slot_second: 6}
 
   sek1_max_slot: 7     # Letzte Stunde für Sek-I-Klassen
-  min_hours_per_day: 5 # ohne Wirkung (siehe unten)
 ```
 
 ### Jahrgänge
@@ -299,8 +300,6 @@ teachers:
   deputat_min_fraction: 0.50 # Untergrenze = 50% der Obergrenze
   deputat_max_buffer: 6      # Obergrenze = Soll (aufgerundet) + 6h
   deputat_min_buffer: 2      # optional: Untergrenze = Soll (abgerundet) - 2h
-  max_gaps_per_day: 1        # ohne Wirkung (siehe unten)
-  max_gaps_per_week: 3       # ohne Wirkung (siehe unten)
 ```
 
 Jede Lehrkraft hat ein **Soll-Deputat** (Spalte *Deputat* im Blatt
@@ -334,18 +333,22 @@ solver:
   subject_day_limit: true   # Regel C15 (siehe Constraint-Übersicht)
 ```
 
-**Einstellungen ohne Wirkung.** Diese Felder werden noch gelesen,
-damit bestehende Konfigurationen laden, der Solver beachtet sie aber
-nicht:
+**Entfernte Einstellungen.** Diese Felder hatten nie eine Wirkung und
+sind entfernt. Ältere Konfigurationen, Datensätze, Szenarien und
+Excel-Mappen laden weiter: die Felder werden ignoriert, und das Programm
+nennt sie einmal als Warnung. Sie können aus den Dateien gelöscht werden.
 
-| Feld | Hinweis |
-|------|---------|
+| Feld | Stattdessen |
+|------|-------------|
 | `time_grid.min_hours_per_day` | Tagesbeginn und lückenlose Klassenpläne regeln C9/C10 |
-| `teachers.max_gaps_per_day` (auch Excel-Spalte *Max Springstd/Tag*) | keine Regel prüft es |
-| `teachers.max_gaps_per_week` | wirksam ist nur `solver.max_gaps_per_week` |
-| `solver.weight_workload_balance` | gleichmäßige Tagesverteilung nie umgesetzt |
+| `teachers.max_gaps_per_day` (auch Excel-Spalte *Max Springstd/Tag*) | – |
+| `teachers.max_gaps_per_week` | `solver.max_gaps_per_week` |
+| `solver.weight_workload_balance` | – |
 | `solver.weight_compact` | kompakte Lehrerpläne entstehen über `weight_gaps` |
-| `solver.weight_subject_spread` | ersetzt durch die harte Regel C15 |
+| `solver.weight_subject_spread` | die harte Regel C15 |
+
+`solve --weights` kennt nur `gaps`, `day_wishes` und `double_lessons`;
+andere Namen meldet es als ohne Wirkung.
 
 `subject_day_limit: false` schaltet die Regel C15 ab. Solver und
 `validate --solution` lesen die Einstellung aus dem Datensatz
@@ -569,7 +572,7 @@ stundenplan/
 | S6 | Nähe zum Soll-Deputat je Lehrkraft (quadratisch) | Weich |
 
 S2 (gleichmäßige Tagesverteilung) und S4 (kompakte Lehrerpläne) standen
-hier früher, waren aber nie umgesetzt; ihre Gewichte sind ohne Wirkung.
+hier früher, waren aber nie umgesetzt; ihre Gewichte sind entfernt.
 Die Nummern der übrigen Regeln bleiben, damit ältere Hinweise passen.
 
 **C15 im Detail:** Zwei Stunden desselben Fachs am selben Tag sind nur
@@ -580,8 +583,7 @@ vom Solver (Verstoß: `subject_day_limit`). Kein Bundesland schreibt die
 Regel vor; mit `solver.subject_day_limit: false` entfällt sie in Solver
 und Validator. Dann verteilt nichts mehr ein Fach über die Woche: auch
 drei Stunden desselben Fachs an einem Tag sind möglich. Das frühere Gewicht
-`weight_subject_spread` ist ohne Wirkung und nur noch aus
-Kompatibilitätsgründen in der Konfiguration erlaubt.
+`weight_subject_spread` ist entfernt.
 
 **Doppelstunden-Pflicht im Detail** (Fächer mit Doppelstunde `Pflicht`):
 Bei gerader Stundenzahl liegen alle Stunden als Doppelstunden in den

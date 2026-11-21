@@ -208,3 +208,34 @@ class TestCurriculumSheet:
         class_7a = next(c for c in data.classes if c.id == "7a")
         assert class_7a.curriculum["Deutsch"] == 4
         assert len(_matching(report.warnings, "Jahrgang 7 fehlt")) == 1
+
+
+class TestRemovedGapColumn:
+    """Die Spalte "Max Springstd/Tag" (ohne Wirkung) ist entfernt."""
+
+    OLD_HEADER = "Max Springstd/Tag"
+
+    def test_template_has_no_gap_column(self, workbook_path: Path):
+        sheet = openpyxl.load_workbook(workbook_path)[TEACHER_SHEET]
+        headers = [cell.value for cell in sheet[1]]
+        assert self.OLD_HEADER not in headers
+        assert headers[-1] == "Max Std/Tag"
+
+    def test_workbook_with_old_gap_column_still_imports(
+        self, workbook_path: Path
+    ):
+        before, before_report = import_from_excel(
+            workbook_path, make_mini_config()
+        )
+        workbook = openpyxl.load_workbook(workbook_path)
+        sheet = workbook[TEACHER_SHEET]
+        column = sheet.max_column + 1
+        sheet.cell(row=1, column=column, value=self.OLD_HEADER)
+        for row in range(3, sheet.max_row + 1):
+            sheet.cell(row=row, column=column, value=2)
+        workbook.save(workbook_path)
+        after, after_report = import_from_excel(
+            workbook_path, make_mini_config()
+        )
+        assert after.teachers == before.teachers
+        assert after_report.errors == before_report.errors

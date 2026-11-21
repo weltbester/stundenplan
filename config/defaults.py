@@ -65,7 +65,6 @@ def default_time_grid() -> TimeGridConfig:
             # Stunden 8-10 (SII): 9-10 wäre ein Block für v2
         ],
         sek1_max_slot=7,
-        min_hours_per_day=5,
     )
 
 

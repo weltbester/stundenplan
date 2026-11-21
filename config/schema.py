@@ -1,8 +1,40 @@
+import logging
 import math
 
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+# Einstellungen, die nie eine Wirkung hatten und entfernt sind. Ältere
+# YAML-Dateien, Datensätze und Szenarien laden weiter: die Felder werden
+# ignoriert und einmal je Programmlauf als Warnung genannt.
+REMOVED_FIELDS: dict[str, tuple[str, ...]] = {
+    "time_grid": ("min_hours_per_day",),
+    "teachers": ("max_gaps_per_day", "max_gaps_per_week"),
+    "solver": (
+        "weight_workload_balance", "weight_compact", "weight_subject_spread",
+    ),
+}
+_warned_removed_fields: set[str] = set()
+
+
+def drop_removed_fields(data: object, section: str) -> object:
+    """Entfernt die Felder aus REMOVED_FIELDS[section] aus Rohdaten."""
+    if not isinstance(data, dict):
+        return data
+    removed = [name for name in REMOVED_FIELDS[section] if name in data]
+    for name in removed:
+        key = f"{section}.{name}"
+        if key not in _warned_removed_fields:
+            _warned_removed_fields.add(key)
+            logger.warning(
+                "Einstellung '%s' wird ignoriert: sie hatte keine Wirkung "
+                "und ist entfernt. Sie kann aus der Datei gelöscht werden.",
+                key,
+            )
+    return {k: v for k, v in data.items() if k not in removed}
 
 
 class SchoolType(str, Enum):
@@ -75,11 +107,11 @@ class TimeGridConfig(BaseModel):
     # Letzte Stunde für Sek-I-Klassen
     sek1_max_slot: int = Field(7,
         description="Letzte Stunde für Sek-I-Klassen")
-    # OHNE WIRKUNG: der Solver liest das Feld nicht (der Tagesbeginn in
-    # Stunde 1 und lückenlose Klassenpläne folgen aus C9/C10). Es bleibt,
-    # damit bestehende YAML-Dateien laden.
-    min_hours_per_day: int = Field(5, ge=3, le=8,
-        description="Ohne Wirkung (vom Solver nicht gelesen)")
+
+    @model_validator(mode='before')
+    @classmethod
+    def _ignore_removed_fields(cls, data):
+        return drop_removed_fields(data, "time_grid")
 
     @model_validator(mode='after')
     def validate_double_blocks(self):
@@ -144,6 +176,12 @@ class GradeConfig(BaseModel):
 
 class TeacherConfig(BaseModel):
     """Lehrkräfte-Konfiguration (globale Defaults)."""
+
+    @model_validator(mode='before')
+    @classmethod
+    def _ignore_removed_fields(cls, data):
+        return drop_removed_fields(data, "teachers")
+
     # Gesamtzahl der Lehrkräfte an der Schule
     total_count: int = Field(60, ge=10,
         description="Gesamtzahl Lehrkräfte")
@@ -162,13 +200,6 @@ class TeacherConfig(BaseModel):
     # Globaler Default: max. Unterrichtsstunden pro Tag
     max_hours_per_day: int = Field(6, ge=4, le=8,
         description="Max Unterrichtsstunden pro Tag (globaler Default)")
-    # OHNE WIRKUNG: wird an die Lehrkräfte weitergegeben, aber von keiner
-    # Regel geprüft. Wirksam ist nur solver.max_gaps_per_week.
-    max_gaps_per_day: int = Field(1, ge=0, le=3,
-        description="Ohne Wirkung (keine Regel prüft es)")
-    # OHNE WIRKUNG: wirksam ist nur solver.max_gaps_per_week.
-    max_gaps_per_week: int = Field(3, ge=0, le=10,
-        description="Ohne Wirkung (siehe solver.max_gaps_per_week)")
     # Mindestauslastung relativ zu deputat_max (0.5–1.0)
     # 0.50 = Sicherheitsboden; in Produktionskonfigurationen eher 0.75–0.90.
     deputat_min_fraction: float = Field(
@@ -283,6 +314,12 @@ class CouplingConfig(BaseModel):
 
 class SolverConfig(BaseModel):
     """Solver-Konfiguration und Optimierungsgewichte."""
+
+    @model_validator(mode='before')
+    @classmethod
+    def _ignore_removed_fields(cls, data):
+        return drop_removed_fields(data, "solver")
+
     # Zeitlimit für den ganzen Lauf in Sekunden. Leer (None) = nach
     # Schulgröße, siehe solver/time_budget.py recommended_time_limit.
     time_limit_seconds: Optional[int] = Field(None, ge=30, le=3600,
@@ -293,25 +330,12 @@ class SolverConfig(BaseModel):
     # Gewicht für Minimierung von Springstunden
     weight_gaps: int = Field(200, ge=0,
         description="Gewicht: Springstunden minimieren")
-    # OHNE WIRKUNG: die angekündigte gleichmäßige Tagesverteilung wurde nie
-    # umgesetzt. Das Feld bleibt, damit bestehende YAML-Dateien laden.
-    weight_workload_balance: int = Field(50, ge=0,
-        description="Ohne Wirkung (nie umgesetzt)")
     # Gewicht für Berücksichtigung von Wunsch-freien Tagen
     weight_day_wishes: int = Field(20, ge=0,
         description="Gewicht: Wunsch-freie Tage")
-    # OHNE WIRKUNG: kompakte Lehrerpläne entstehen über weight_gaps
-    # (Springstunden). Das Feld bleibt, damit bestehende YAML-Dateien laden.
-    weight_compact: int = Field(30, ge=0,
-        description="Ohne Wirkung (siehe weight_gaps)")
     # Gewicht für optionale Doppelstunden
     weight_double_lessons: int = Field(40, ge=0,
         description="Gewicht: Optionale Doppelstunden")
-    # VERALTET, ohne Wirkung: die Verteilung über die Woche erzwingt die
-    # harte Regel C15 (max. 1 Stunde oder 1 Doppelblock pro Fach und Tag).
-    # Das Feld bleibt, damit bestehende YAML-Dateien und Szenarien laden.
-    weight_subject_spread: int = Field(60, ge=0,
-        description="Veraltet (ohne Wirkung, ersetzt durch C15)")
     # Gewicht für die Nähe zum Soll-Deputat (immer aktiv, auch bei --no-soft).
     # Strafe je Lehrkraft: Gewicht × (Abstand vom Soll in halben Stunden)².
     # Mit 50 kostet eine Stunde Abstand so viel wie eine Springstunde (200).

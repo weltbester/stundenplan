@@ -353,19 +353,19 @@ def generate_template(
     lk_headers = [
         "Name (Nachname, Vorname)", "Kürzel", "Fach 1", "Fach 2", "Fach 3",
         "Deputat", "Teilzeit", "Sperrzeiten (z.B. Mo1,Di3,Fr5)",
-        "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag", "Max Springstd/Tag",
+        "Wunschtage (z.B. Mo,Fr)", "Max Std/Tag",
     ]
     for col, h in enumerate(lk_headers, 1):
         style_header(ws_lk.cell(row=1, column=col, value=h))
 
-    widths_lk = [28, 10, 16, 16, 16, 10, 10, 26, 22, 12, 16]
+    widths_lk = [28, 10, 16, 16, 16, 10, 10, 26, 22, 12]
     for col, w in enumerate(widths_lk, 1):
         set_col_width(ws_lk, col, w)
 
     # Beispielzeile (kursiv)
     example_row = [
         f"{EXAMPLE_PREFIX}: Müller, Hans", "MÜL", "Mathematik", "Physik", "",
-        26, "nein", "Mi5", "Fr", 6, 2,
+        26, "nein", "Mi5", "Fr", 6,
     ]
     for col, val in enumerate(example_row, 1):
         style_example(ws_lk.cell(row=2, column=col, value=val))
@@ -844,12 +844,8 @@ class ExcelImporter:
             except ValueError:
                 max_h = tc.max_hours_per_day
 
-            # Max Springstd/Tag
-            max_g_raw = row.get("max springstd/tag", row.get("max_springstd", "")).strip()
-            try:
-                max_g = int(float(max_g_raw)) if max_g_raw else tc.max_gaps_per_day
-            except ValueError:
-                max_g = tc.max_gaps_per_day
+            # Eine Spalte "Max Springstd/Tag" aus älteren Mappen wird
+            # ignoriert (die Einstellung hatte nie eine Wirkung).
 
             deputat_min, deputat_max = tc.deputat_bounds(deputat)
             teachers.append(Teacher(
@@ -863,7 +859,6 @@ class ExcelImporter:
                 unavailable_slots=unavailable,
                 preferred_free_days=free_days,
                 max_hours_per_day=max_h,
-                max_gaps_per_day=max_g,
             ))
 
         if not teachers:

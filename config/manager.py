@@ -38,7 +38,7 @@ yaml.width = 120
 _YAML_HEADER = f"""\
 # ============================================
 # Stundenplan-Generator — Schulkonfiguration
-# Version: 1.1 (Sekundarstufe I)
+# Version: 1.2 (Sekundarstufe I)
 # Erstellt: {date.today().isoformat()}
 # ============================================
 """

@@ -5,6 +5,8 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-21
+
 ### Added
 - Zeitlimit nach Schulgröße: ist `solver.time_limit_seconds` leer (neuer
   Standard), gilt 12,5 s je Klasse, mindestens 300 s (36 Klassen →

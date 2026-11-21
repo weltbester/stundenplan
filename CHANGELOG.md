@@ -281,6 +281,9 @@ Format angelehnt an [Keep a Changelog](https://keepachangelog.com/de/).
 
 ### Removed
 - `.DS_Store` aus der Versionsverwaltung entfernt (Datei bleibt lokal).
+- `stundenplan-guide-v1.1.md` (ursprüngliche Bauanleitung) aus der
+  Versionsverwaltung entfernt; lokal liegt sie in `archive/`, das
+  jetzt in `.gitignore` steht.
 - Einstellungen ohne Wirkung: `time_grid.min_hours_per_day`,
   `teachers.max_gaps_per_day`, `teachers.max_gaps_per_week`,
   `solver.weight_workload_balance`, `solver.weight_compact`,

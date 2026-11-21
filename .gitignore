@@ -21,5 +21,7 @@ config/school_config.yaml
 # Ausgabe- und Szenario-Dateien
 output/*
 !output/.gitkeep
+# Archivierte alte Ausgaben, Test- und Sicherungsdateien
+archive/
 scenarios/*
 !scenarios/.gitkeep

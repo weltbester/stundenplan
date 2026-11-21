@@ -610,14 +610,17 @@ class TestCli:
         assert result.exit_code == 0
         assert "Usage" in result.output
 
-    def test_config_show_no_file(self):
+    def test_config_show_no_file(self, tmp_path: Path, monkeypatch):
         """config show ohne Konfiguration → Fehlermeldung."""
         from click.testing import CliRunner
         from main import cli
+        # ConfigManager sucht config/school_config.yaml relativ zum
+        # Arbeitsverzeichnis; im leeren tmp_path gibt es keine.
+        monkeypatch.chdir(tmp_path)
         runner = CliRunner()
-        with runner.isolated_filesystem():
-            result = runner.invoke(cli, ["config", "show"])
-            assert result.exit_code != 0 or "Keine Konfiguration" in result.output
+        result = runner.invoke(cli, ["config", "show"])
+        assert result.exit_code == 1
+        assert "Keine Konfiguration" in result.output
 
     def test_generate_command_exists(self):
         """generate Befehl ist registriert und hat --export-json."""
